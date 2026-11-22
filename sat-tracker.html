@@ -126,10 +126,35 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
   }
   .panel.open { display: block; }
   #togglePanel { display: block; }
-  .card { top: auto; bottom: 64px; right: 12px; left: 12px; width: auto; }
+  .card { top: auto; bottom: 88px; right: 12px; left: 12px; width: auto; }
   .hint { display: none; }
   .topbar { padding: 8px 10px; }
   .timebar { bottom: 8px; left: 8px; right: 8px; }
+}
+
+.zoombar {
+  position: absolute; right: 12px; top: 46%;
+  transform: translateY(-50%);
+  display: flex; flex-direction: column; gap: 6px;
+  z-index: 3;
+}
+.zoombar button {
+  width: 44px; height: 44px; padding: 0;
+  font-size: 22px; font-weight: 650; line-height: 1;
+  border-radius: 12px;
+  background: var(--panel);
+}
+.zoombar button#zoomReset {
+  font-size: 9px; letter-spacing: .06em; text-transform: uppercase;
+  height: 36px;
+}
+.card .card-actions { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+.card .card-actions button { font-size: 11px; padding: 6px 8px; }
+.card #cardSlantRow { display: none; }
+.card #cardSlantRow.on { display: contents; }
+@media (max-width: 680px) {
+  .zoombar { top: 132px; bottom: auto; transform: none; }
+  .zoombar button { width: 44px; height: 44px; }
 }
 
   </style>
@@ -151,6 +176,11 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
       <div id="filters"></div>
       <p class="credit">Orbit data from <a href="https://celestrak.org/NORAD/elements/" target="_blank" rel="noopener">CelesTrak</a> (GP, updated ~every 2 hours). Propagated with <a href="https://github.com/shashwatak/satellite-js" target="_blank" rel="noopener">satellite.js</a> (MIT). Not for operational use.</p>
     </aside>
+    <div class="zoombar" id="zoombar">
+      <button type="button" id="zoomIn" title="Zoom in" aria-label="Zoom in">+</button>
+      <button type="button" id="zoomOut" title="Zoom out" aria-label="Zoom out">−</button>
+      <button type="button" id="zoomReset" title="Reset view" aria-label="Reset view">Reset</button>
+    </div>
     <div class="card" id="card">
       <button type="button" class="close" id="cardClose" aria-label="Close">×</button>
       <div class="k">Selected satellite</div>
@@ -158,11 +188,18 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
       <dl>
         <dt>NORAD ID</dt><dd id="cardId">—</dd>
         <dt>Altitude</dt><dd id="cardAlt">—</dd>
+        <div id="cardSlantRow">
+          <dt>Slant range</dt><dd id="cardSlant">—</dd>
+        </div>
         <dt>Radius</dt><dd id="cardR">—</dd>
         <dt>Group</dt><dd id="cardGroup">—</dd>
       </dl>
+      <div class="card-actions">
+        <button type="button" id="zoomToBtn">Zoom to</button>
+        <button type="button" id="useLocBtn">Distance from me</button>
+      </div>
     </div>
-    <div class="hint">Drag to rotate · pinch or scroll to zoom · tap a dot for details. ISS is the gold ring.</div>
+    <div class="hint">Pinch or scroll to zoom, even close enough to separate individual satellites. Two-finger or drag to pan when zoomed in. Tap a dot for altitude in km and miles. ISS is the gold ring.</div>
     <div class="toast" id="toast" role="status"></div>
     <div class="timebar">
       <button type="button" id="nowBtn">Now</button>
@@ -172,6 +209,7 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
     </div>
     <div id="loader"><div class="orb"></div><div id="loaderText">Loading catalog…</div></div>
   </div>
+
   <script id="satellite-js">
 /* satellite.js v7.2.0
  * MIT License
@@ -337,9 +375,17 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
   let speed = 1;
   let live = true;
 
+  const VIEW_RADIUS_DEFAULT = 48000;
+  const VIEW_RADIUS_MIN = 80;
+  const VIEW_RADIUS_MAX = 90000;
+  const LABEL_RADIUS = 2200;
+  const HIT_PX = 24;
+  const KM_PER_MILE = 1.609344;
+
   let yaw = 2.4;
   let pitch = 0.35;
-  let viewRadius = 48000;
+  let viewRadius = VIEW_RADIUS_DEFAULT;
+  let panVx = 0, panVy = 0;
   let dpr = 1;
   let width = 0, height = 0, cx = 0, cy = 0, scale = 1;
 
@@ -350,8 +396,10 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
   let dragging = false, dragMoved = false;
   let lastPx = 0, lastPy = 0, lastPid = null;
   let pointers = new Map();
-  let pinchStartDist = 0, pinchStartRadius = 0;
+  let pinch = null;
   let selected = -1;
+  let userEcf = null;
+  let userGeo = null;
   let toastTimer = 0;
   let lastFrameDrawnWithData = false;
 
@@ -397,6 +445,42 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
     if (s < 10) return s.toFixed(1) + "×";
     if (s < 100) return s.toFixed(0) + "×";
     return Math.round(s) + "×";
+  }
+
+  function fmtKm(km, decimals) {
+    if (!Number.isFinite(km)) return "—";
+    const d = decimals == null ? (Math.abs(km) >= 10000 ? 0 : 1) : decimals;
+    return km.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }) + " km";
+  }
+
+  function fmtAlt(km, compact) {
+    if (!Number.isFinite(km)) return "—";
+    const mi = km / KM_PER_MILE;
+    if (compact) {
+      const d = Math.abs(km) >= 10000 ? 0 : 0;
+      return Math.round(km).toLocaleString("en-US") + " km";
+    }
+    return fmtKm(km) + " · " + fmtKm(mi).replace(" km", " mi");
+  }
+
+  function altOf(i) {
+    if (ok[i]) return alt[i];
+    currentPos(i, tmp);
+    return Math.hypot(tmp[0], tmp[1], tmp[2]) - EARTH_R;
+  }
+
+  function slantRangeOf(i) {
+    if (!userEcf) return null;
+    currentPos(i, tmp);
+    return Math.hypot(tmp[0] - userEcf.x, tmp[1] - userEcf.y, tmp[2] - userEcf.z);
+  }
+
+  function clampRadius(r) {
+    return Math.min(VIEW_RADIUS_MAX, Math.max(VIEW_RADIUS_MIN, r));
+  }
+
+  function zoomedIn() {
+    return viewRadius < 14000;
   }
 
 
@@ -736,7 +820,7 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
   }
 
   function resize() {
-    dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    dpr = Math.min(window.devicePixelRatio || 1, 3);
     width = window.innerWidth;
     height = window.innerHeight;
     canvas.width = Math.round(width * dpr);
@@ -764,7 +848,59 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
     const vx = x * rx + y * ry + z * rz;
     const vy = x * ux + y * uy + z * uz;
     const vz = x * camX + y * camY + z * camZ;
-    return { vx, vy, vz, sx: cx + vx * scale, sy: cy - vy * scale };
+    return { vx, vy, vz, sx: cx + (vx - panVx) * scale, sy: cy - (vy - panVy) * scale };
+  }
+
+  function earthScreen() {
+    return { x: cx - panVx * scale, y: cy + panVy * scale, r: EARTH_R * scale };
+  }
+
+  function viewUnder(sx, sy) {
+    return {
+      vx: panVx + (sx - cx) / scale,
+      vy: panVy - (sy - cy) / scale
+    };
+  }
+
+  function setViewRadiusAt(next, aroundSx, aroundSy) {
+    if (scale <= 0) updateCamera();
+    const hold = viewUnder(aroundSx, aroundSy);
+    viewRadius = clampRadius(next);
+    updateCamera();
+    panVx = hold.vx - (aroundSx - cx) / scale;
+    panVy = hold.vy + (aroundSy - cy) / scale;
+  }
+
+  function panByPixels(dx, dy) {
+    if (scale <= 0) updateCamera();
+    panVx -= dx / scale;
+    panVy += dy / scale;
+  }
+
+  function resetView() {
+    viewRadius = VIEW_RADIUS_DEFAULT;
+    panVx = 0;
+    panVy = 0;
+    yaw = 2.4;
+    pitch = 0.35;
+  }
+
+  function zoomBy(factor, aroundSx, aroundSy) {
+    const sx = aroundSx == null ? cx : aroundSx;
+    const sy = aroundSy == null ? cy : aroundSy;
+    setViewRadiusAt(viewRadius * factor, sx, sy);
+  }
+
+  function zoomToIndex(i) {
+    if (i < 0 || !ok[i]) return;
+    currentPos(i, tmp);
+    const r = Math.hypot(tmp[0], tmp[1], tmp[2]) || 1;
+    yaw = Math.atan2(tmp[1], tmp[0]);
+    pitch = Math.asin(Math.max(-1, Math.min(1, tmp[2] / r)));
+    panVx = 0;
+    panVy = 0;
+    viewRadius = clampRadius(450);
+    updateCamera();
   }
 
   function occluded(vx, vy, vz) {
@@ -791,30 +927,31 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
   }
 
   function drawEarth(date) {
-    const rpx = EARTH_R * scale;
+    const es = earthScreen();
+    const rpx = Math.max(1, es.r);
     const sun = sunEcf(date);
     const sl = projectRaw(sun.x * EARTH_R, sun.y * EARTH_R, sun.z * EARTH_R);
 
     // Atmosphere glow
-    const glow = ctx.createRadialGradient(cx, cy, rpx * 0.92, cx, cy, rpx * 1.18);
+    const glow = ctx.createRadialGradient(es.x, es.y, rpx * 0.92, es.x, es.y, rpx * 1.18);
     glow.addColorStop(0, "rgba(90, 170, 255, 0.18)");
     glow.addColorStop(0.55, "rgba(40, 120, 220, 0.08)");
     glow.addColorStop(1, "rgba(0, 0, 0, 0)");
     ctx.fillStyle = glow;
     ctx.beginPath();
-    ctx.arc(cx, cy, rpx * 1.18, 0, Math.PI * 2);
+    ctx.arc(es.x, es.y, rpx * 1.18, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.save();
     ctx.beginPath();
-    ctx.arc(cx, cy, Math.max(1, rpx), 0, Math.PI * 2);
+    ctx.arc(es.x, es.y, rpx, 0, Math.PI * 2);
     ctx.clip();
 
     ctx.fillStyle = "#071624";
     ctx.fill();
 
-    const lx = cx + (sl.vx / EARTH_R) * rpx * 0.45;
-    const ly = cy - (sl.vy / EARTH_R) * rpx * 0.45;
+    const lx = es.x + sl.vx * scale * 0.45;
+    const ly = es.y - sl.vy * scale * 0.45;
     const day = ctx.createRadialGradient(lx, ly, rpx * 0.05, lx, ly, rpx * 1.45);
     day.addColorStop(0, "rgba(186, 222, 232, 0.95)");
     day.addColorStop(0.22, "rgba(62, 140, 150, 0.75)");
@@ -822,7 +959,7 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
     day.addColorStop(0.72, "rgba(6, 22, 48, 0.72)");
     day.addColorStop(1, "rgba(1, 4, 14, 0.96)");
     ctx.fillStyle = day;
-    ctx.fillRect(cx - rpx - 2, cy - rpx - 2, rpx * 2 + 4, rpx * 2 + 4);
+    ctx.fillRect(es.x - rpx - 2, es.y - rpx - 2, rpx * 2 + 4, rpx * 2 + 4);
 
     // Polar caps
     drawCap(1);
@@ -839,7 +976,7 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
 
     // Limb highlight
     ctx.beginPath();
-    ctx.arc(cx, cy, rpx, 0, Math.PI * 2);
+    ctx.arc(es.x, es.y, rpx, 0, Math.PI * 2);
     ctx.strokeStyle = "rgba(180, 220, 255, 0.28)";
     ctx.lineWidth = 1.2;
     ctx.stroke();
@@ -908,12 +1045,25 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
   const tmp = [0, 0, 0];
   let projCache = [];
 
+  function dotSizeFor() {
+    const t = Math.max(0, Math.log2(8000 / Math.max(viewRadius, VIEW_RADIUS_MIN)));
+    return 1.8 + Math.min(6.5, t * 1.2);
+  }
+
+  function shortName(name) {
+    const s = String(name || "").replace(/\s+/g, " ").trim();
+    return s.length > 18 ? s.slice(0, 17) + "…" : s;
+  }
+
+  function boxesOverlap(a, b, pad) {
+    return !(a.x + a.w + pad < b.x || b.x + b.w + pad < a.x || a.y + a.h + pad < b.y || b.y + b.h + pad < a.y);
+  }
+
   function drawSats() {
     if (!ok.length) return;
     const n = metas.length;
     if (projCache.length !== n) projCache = new Array(n);
-    const sizes = {};
-    GROUPS.forEach((g) => { sizes[g.id] = viewRadius > 30000 ? 1.4 : viewRadius > 16000 ? 1.8 : 2.3; });
+    const s = dotSizeFor();
     let issIdx = -1;
     for (let i = 0; i < n; i++) {
       if (!ok[i]) { projCache[i] = null; continue; }
@@ -925,31 +1075,97 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
       pr.i = i;
       projCache[i] = pr;
       if (m.isIss) { issIdx = i; continue; }
-      const s = sizes[m.group];
       ctx.fillStyle = m.color;
       ctx.fillRect(pr.sx - s * 0.5, pr.sy - s * 0.5, s, s);
     }
     if (issIdx >= 0 && projCache[issIdx]) {
       const pr = projCache[issIdx];
       const pulse = 1 + 0.25 * Math.sin(performance.now() / 220);
-      const r = 5 * pulse;
+      const r = Math.max(5, s * 1.4) * pulse;
       ctx.beginPath();
       ctx.arc(pr.sx, pr.sy, r + 3, 0, Math.PI * 2);
       ctx.strokeStyle = "rgba(255, 230, 160, 0.85)";
       ctx.lineWidth = 1.5;
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(pr.sx, pr.sy, 3.2, 0, Math.PI * 2);
+      ctx.arc(pr.sx, pr.sy, Math.max(3.2, s * 0.7), 0, Math.PI * 2);
       ctx.fillStyle = "#ffe08a";
       ctx.fill();
     }
     if (selected >= 0 && projCache[selected]) {
       const pr = projCache[selected];
       ctx.beginPath();
-      ctx.arc(pr.sx, pr.sy, 7, 0, Math.PI * 2);
+      ctx.arc(pr.sx, pr.sy, Math.max(7, s * 1.6 + 3), 0, Math.PI * 2);
       ctx.strokeStyle = "#ffffff";
       ctx.lineWidth = 1.4;
       ctx.stroke();
+    }
+    drawAltitudeLabels();
+  }
+
+  function drawAltitudeLabels() {
+    if (viewRadius > LABEL_RADIUS) return;
+    const narrow = width <= 680;
+    const margin = 8;
+    const topSafe = narrow ? 126 : 86;
+    const bottomSafe = narrow ? height - 250 : height - 86;
+    const rightSafe = width - 58;
+    const candidates = [];
+    for (let i = 0; i < projCache.length; i++) {
+      const pr = projCache[i];
+      if (!pr) continue;
+      if (pr.sx < margin || pr.sx > rightSafe || pr.sy < topSafe || pr.sy > bottomSafe) continue;
+      candidates.push(i);
+    }
+    candidates.sort((a, b) => {
+      const sa = a === selected, sb = b === selected;
+      if (sa !== sb) return sa ? -1 : 1;
+      const ia = metas[a].isIss, ib = metas[b].isIss;
+      if (ia !== ib) return ia ? -1 : 1;
+      return projCache[b].vz - projCache[a].vz;
+    });
+    const detailed = viewRadius < 600;
+    ctx.font = "11px " + getComputedStyle(document.body).fontFamily;
+    ctx.textBaseline = "top";
+    const placed = [];
+    const maxLabels = 40;
+    let drawn = 0;
+    for (const i of candidates) {
+      const force = i === selected || metas[i].isIss;
+      if (!force && drawn >= maxLabels) continue;
+      const pr = projCache[i];
+      const km = altOf(i);
+      const name = shortName(metas[i].name);
+      const line2 = detailed ? fmtAlt(km, false) : fmtAlt(km, true);
+      const w = Math.ceil(Math.max(ctx.measureText(name).width, ctx.measureText(line2).width)) + 8;
+      const h = 26;
+      let lx = pr.sx + 8;
+      let ly = pr.sy - 10;
+      if (lx + w > rightSafe) lx = pr.sx - 8 - w;
+      if (lx < margin) lx = margin;
+      if (ly < topSafe) ly = pr.sy + 8;
+      if (ly + h > bottomSafe) ly = Math.max(topSafe, pr.sy - 8 - h);
+      if (ly + h > bottomSafe || ly < topSafe) {
+        if (!force) continue;
+      }
+      const box = { x: lx, y: ly, w: w, h: h };
+      if (!force) {
+        let hit = false;
+        for (let p = 0; p < placed.length; p++) {
+          if (boxesOverlap(box, placed[p], 4)) { hit = true; break; }
+        }
+        if (hit) continue;
+      }
+      placed.push(box);
+      ctx.fillStyle = "rgba(5, 8, 16, 0.72)";
+      ctx.fillRect(box.x, box.y, box.w, box.h);
+      ctx.fillStyle = metas[i].color;
+      ctx.fillRect(box.x, box.y, 3, box.h);
+      ctx.fillStyle = "#f2f6fb";
+      ctx.fillText(name, box.x + 6, box.y + 2);
+      ctx.fillStyle = "#c9d4e6";
+      ctx.fillText(line2, box.x + 6, box.y + 13);
+      drawn++;
     }
   }
 
@@ -995,13 +1211,13 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
   }
 
   function pick(sx, sy) {
-    let best = -1, bestD = 16;
+    let best = -1, bestD = HIT_PX;
     for (let i = 0; i < projCache.length; i++) {
       const p = projCache[i];
       if (!p) continue;
       const d = Math.hypot(p.sx - sx, p.sy - sy);
-      const pad = metas[i].isIss ? 20 : 16;
-      if (d < pad && d < bestD) { bestD = d; best = i; }
+      const pad = metas[i].isIss || i === selected ? HIT_PX + 6 : HIT_PX;
+      if (d <= pad && d < bestD) { bestD = d; best = i; }
     }
     return best;
   }
@@ -1011,15 +1227,22 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
     const m = metas[i];
     currentPos(i, tmp);
     const r = Math.hypot(tmp[0], tmp[1], tmp[2]);
-    const altitude = ok[i] ? alt[i] + ( /* height is from last sample; use geometric as fallback */ 0) : (r - EARTH_R);
-    // Improve altitude by using current geometric height from interpolated radius; geodetic varies slowly.
-    const dt = (simTime - sampleTime) / 1000;
-    const altNow = (ok[i] ? alt[i] : (r - EARTH_R));
+    const altNow = altOf(i);
     document.getElementById("cardName").textContent = m.name;
     document.getElementById("cardId").textContent = String(m.id);
-    document.getElementById("cardAlt").textContent = (Number.isFinite(altNow) ? altNow.toFixed(1) : "—") + " km";
+    document.getElementById("cardAlt").textContent = fmtAlt(altNow, false);
     document.getElementById("cardGroup").textContent = GROUPS[GROUP_INDEX[m.group]].label;
-    document.getElementById("cardR").textContent = r.toFixed(1) + " km";
+    document.getElementById("cardR").textContent = fmtKm(r);
+    const slant = slantRangeOf(i);
+    const slantRow = document.getElementById("cardSlantRow");
+    if (slantRow) {
+      if (slant != null) {
+        slantRow.classList.add("on");
+        document.getElementById("cardSlant").textContent = fmtAlt(slant, false);
+      } else {
+        slantRow.classList.remove("on");
+      }
+    }
     $card.classList.add("visible");
   }
 
@@ -1028,13 +1251,22 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
     $card.classList.remove("visible");
   }
 
+  function midpointOfPointers() {
+    const pts = [...pointers.values()];
+    if (pts.length < 2) return null;
+    return {
+      x: (pts[0].x + pts[1].x) / 2,
+      y: (pts[0].y + pts[1].y) / 2,
+      dist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y)
+    };
+  }
+
   function onPointerDown(e) {
     canvas.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size === 2) {
-      const pts = [...pointers.values()];
-      pinchStartDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      pinchStartRadius = viewRadius;
+      const mid = midpointOfPointers();
+      pinch = mid ? { dist0: mid.dist, midX: mid.x, midY: mid.y, radius0: viewRadius, panVx0: panVx, panVy0: panVy } : null;
       dragging = false;
     } else {
       dragging = true;
@@ -1045,25 +1277,37 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
   function onPointerMove(e) {
     if (!pointers.has(e.pointerId)) return;
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pointers.size === 2 && pinchStartDist > 0) {
-      const pts = [...pointers.values()];
-      const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      if (d > 0) {
-        viewRadius = Math.min(90000, Math.max(7000, pinchStartRadius * (pinchStartDist / d)));
+    if (pointers.size >= 2 && pinch && pinch.dist0 > 0) {
+      const mid = midpointOfPointers();
+      if (!mid) return;
+      // Two-finger pan follows the midpoint, pinch changes zoom around it.
+      panByPixels(mid.x - pinch.midX, mid.y - pinch.midY);
+      pinch.midX = mid.x;
+      pinch.midY = mid.y;
+      if (mid.dist > 0) {
+        const target = pinch.radius0 * (pinch.dist0 / mid.dist);
+        setViewRadiusAt(target, mid.x, mid.y);
+        pinch.radius0 = viewRadius;
+        pinch.dist0 = mid.dist;
       }
+      dragMoved = true;
       return;
     }
     if (!dragging || e.pointerId !== lastPid) return;
     const dx = e.clientX - lastPx, dy = e.clientY - lastPy;
     if (Math.hypot(dx, dy) > 3) dragMoved = true;
     lastPx = e.clientX; lastPy = e.clientY;
-    yaw -= dx * 0.005;
-    pitch = Math.max(-1.2, Math.min(1.2, pitch + dy * 0.005));
+    if (e.shiftKey || e.buttons === 2 || e.buttons === 4 || zoomedIn()) {
+      panByPixels(dx, dy);
+    } else {
+      yaw -= dx * 0.005;
+      pitch = Math.max(-1.2, Math.min(1.2, pitch + dy * 0.005));
+    }
   }
   function onPointerUp(e) {
     const wasDrag = dragMoved;
     pointers.delete(e.pointerId);
-    if (pointers.size < 2) pinchStartDist = 0;
+    if (pointers.size < 2) pinch = null;
     if (pointers.size === 0) dragging = false;
     if (e.pointerId === lastPid) {
       lastPid = null;
@@ -1081,10 +1325,11 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
   canvas.addEventListener("pointerup", onPointerUp);
   canvas.addEventListener("pointercancel", onPointerUp);
   canvas.addEventListener("pointerleave", (e) => { if (pointers.has(e.pointerId)) onPointerUp(e); });
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
     const f = Math.exp(e.deltaY * 0.0015);
-    viewRadius = Math.min(90000, Math.max(7000, viewRadius * f));
+    setViewRadiusAt(viewRadius * f, e.clientX, e.clientY);
   }, { passive: false });
 
   $speed.addEventListener("input", () => {
@@ -1112,7 +1357,40 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
     $panel.classList.toggle("open");
   });
   document.getElementById("cardClose").addEventListener("click", clearCard);
+  const $zoomIn = document.getElementById("zoomIn");
+  const $zoomOut = document.getElementById("zoomOut");
+  const $zoomReset = document.getElementById("zoomReset");
+  const $zoomTo = document.getElementById("zoomToBtn");
+  const $useLoc = document.getElementById("useLocBtn");
+  if ($zoomIn) $zoomIn.addEventListener("click", () => zoomBy(1 / 1.7, cx, cy));
+  if ($zoomOut) $zoomOut.addEventListener("click", () => zoomBy(1.7, cx, cy));
+  if ($zoomReset) $zoomReset.addEventListener("click", resetView);
+  if ($zoomTo) $zoomTo.addEventListener("click", () => { if (selected >= 0) zoomToIndex(selected); });
+  if ($useLoc) $useLoc.addEventListener("click", requestUserLocation);
   window.addEventListener("resize", resize);
+
+  function requestUserLocation() {
+    if (!navigator.geolocation) {
+      toast("This browser cannot share a location.");
+      return;
+    }
+    toast("Asking for your location…", 2500);
+    navigator.geolocation.getCurrentPosition((pos) => {
+      const lat = pos.coords.latitude * Math.PI / 180;
+      const lon = pos.coords.longitude * Math.PI / 180;
+      const h = (pos.coords.altitude || 0) / 1000;
+      try {
+        userEcf = satellite.geodeticToEcf({ latitude: lat, longitude: lon, height: h });
+        userGeo = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+        if (selected >= 0) showCard(selected);
+        toast("Showing slant range from your location.");
+      } catch (err) {
+        toast("Could not use that location.");
+      }
+    }, (err) => {
+      toast("Location unavailable. Altitude above Earth is still shown.");
+    }, { enableHighAccuracy: false, maximumAge: 600000, timeout: 8000 });
+  }
 
   function updateHeader(result) {
     const n = metas.length.toLocaleString();
@@ -1153,6 +1431,7 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
       window.__SAT_READY__ = !!(ok && ok.length);
       document.documentElement.dataset.ready = window.__SAT_READY__ ? "1" : "0";
       window.__SAT_COUNT__ = metas.length;
+      installTestHook();
     } catch (err) {
       $loader.classList.add("hidden");
       const msg = (err && err.message) ? err.message : String(err);
@@ -1160,6 +1439,45 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
       toast(msg, 8000);
       window.__SAT_ERROR__ = msg;
     }
+  }
+
+  function installTestHook() {
+    window.__SAT_TEST__ = {
+      get viewRadius() { return viewRadius; },
+      get pan() { return { x: panVx, y: panVy }; },
+      get selected() { return selected; },
+      setViewRadiusAt,
+      resetView,
+      zoomToIndex,
+      zoomBy,
+      showCard,
+      setLocation: function (lat, lon, heightKm) {
+        const la = lat * Math.PI / 180, lo = lon * Math.PI / 180;
+        userEcf = satellite.geodeticToEcf({ latitude: la, longitude: lon, height: heightKm || 0 });
+        userGeo = { lat: lat, lon: lon };
+        if (selected >= 0) showCard(selected);
+      },
+      pickFront: function (group) {
+        updateCamera();
+        let best = -1, bestVz = -Infinity;
+        for (let i = 0; i < metas.length; i++) {
+          if (!ok[i]) continue;
+          if (group && metas[i].group !== group) continue;
+          if (enabled[metas[i].group] === false) continue;
+          currentPos(i, tmp);
+          const pr = projectRaw(tmp[0], tmp[1], tmp[2]);
+          if (occluded(pr.vx, pr.vy, pr.vz)) continue;
+          if (pr.vz > bestVz) { bestVz = pr.vz; best = i; }
+        }
+        return best;
+      },
+      zoomToFrontGroup: function (group) {
+        const i = this.pickFront(group || "starlink");
+        if (i >= 0) { showCard(i); zoomToIndex(i); }
+        return i;
+      },
+      labelCount: function () { return viewRadius <= LABEL_RADIUS; }
+    };
   }
 
   resize();
