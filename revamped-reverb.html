@@ -1030,8 +1030,14 @@ input[type="range"] {
     const old = engine.ctx;
     stopGraphSources();
     cancelAnimationFrame(engine.meterRaf);
+    clearTimeout(irTimer);
     engine.ctx = null;
     engine.meter = null;
+    engine.dryTap = null;
+    engine.convolver = null;
+    engine.reverbWet = null;
+    engine.reverbInput = null;
+    engine.reverbOk = false;
     engine.trackNodes.clear();
     engine.ctxStale = false;
     if (old && old.state !== "closed") old.close().catch(() => {});
@@ -1062,17 +1068,22 @@ input[type="range"] {
     engine.meter.fftSize = 1024;
     engine.master.connect(engine.meter);
 
+    // Dry path: always connected at a constant gain of 1, whatever the reverb switch says.
     engine.dry = ctx.createGain();
     engine.dry.gain.value = 1;
     engine.dry.connect(engine.master);
+    engine.dryTap = ctx.createAnalyser();
+    engine.dryTap.fftSize = 1024;
+    engine.dry.connect(engine.dryTap);
 
+    // Reverb: a parallel wet send only (send -> convolver -> wet gain -> master).
+    // Track sends always land on reverbInput; if reverb setup fails, that bus
+    // simply goes nowhere and the dry signal is untouched.
     engine.reverbInput = ctx.createGain();
-    engine.convolver = ctx.createConvolver();
-    engine.convolver.normalize = true;
-    engine.reverbWet = ctx.createGain();
-    engine.reverbInput.connect(engine.convolver);
-    engine.convolver.connect(engine.reverbWet);
-    engine.reverbWet.connect(engine.master);
+    engine.convolver = null;
+    engine.reverbWet = null;
+    engine.reverbOk = false;
+    setupReverb(ctx);
 
     engine.delayInput = ctx.createGain();
     engine.delayNode = ctx.createDelay(2);
@@ -1085,7 +1096,6 @@ input[type="range"] {
     engine.delayWet.connect(engine.master);
 
     applyFxParams();
-    rebuildImpulseResponse();
     if (ctx.state === "suspended") ctx.resume().catch(() => {});
     return ctx;
   }
@@ -1155,24 +1165,137 @@ input[type="range"] {
     engine.meterRaf = requestAnimationFrame(tick);
   }
 
+  // Longest impulse we generate. An 8 s stereo impulse is a heavy real-time
+  // convolution for a budget phone; past ~3.5 s the tail is inaudible anyway
+  // (the decay shape still follows the slider).
+  const MAX_IR_SEC = 3.5;
+
   function generateImpulse(ctx, decaySec) {
     const rate = ctx.sampleRate;
-    const length = Math.max(1, Math.floor(rate * decaySec));
+    const decay = Math.min(8, Math.max(0.15, Number(decaySec) || 2));
+    const lenSec = Math.min(MAX_IR_SEC, decay);
+    const length = Math.max(64, Math.floor(rate * lenSec));
     const ir = ctx.createBuffer(2, length, rate);
+    const tau = rate * (decay / 3);
     for (let ch = 0; ch < 2; ch++) {
       const data = ir.getChannelData(ch);
       for (let i = 0; i < length; i++) {
-        const env = Math.exp(-i / (rate * (decaySec / 3))) * (1 - i / length);
+        const env = Math.exp(-i / tau) * (1 - i / length);
         data[i] = (Math.random() * 2 - 1) * env;
       }
     }
     return ir;
   }
 
-  function rebuildImpulseResponse() {
-    if (!engine.ctx || !engine.convolver) return;
-    const decay = Math.max(0.15, Number(state.reverb.decay) || 2);
-    engine.convolver.buffer = generateImpulse(engine.ctx, decay);
+  function validateImpulse(ir) {
+    let peak = 0;
+    for (let ch = 0; ch < ir.numberOfChannels; ch++) {
+      const d = ir.getChannelData(ch);
+      for (let i = 0; i < d.length; i++) {
+        const v = d[i];
+        if (!Number.isFinite(v)) return `impulse has a non-finite sample (${v}) at ${i}`;
+        const a = v < 0 ? -v : v;
+        if (a > peak) peak = a;
+      }
+    }
+    if (peak < 1e-4) return "impulse is all zeros";
+    return "";
+  }
+
+  function disableReverb(reason) {
+    engine.reverbOk = false;
+    if (engine.reverbWet) { try { engine.reverbWet.disconnect(); } catch (_) { /* */ } }
+    if (engine.convolver) { try { engine.convolver.disconnect(); } catch (_) { /* */ } }
+    if (engine.reverbInput) { try { engine.reverbInput.disconnect(); } catch (_) { /* */ } }
+    diag(`REVERB OFF (dry only): ${reason}`);
+  }
+
+  function setupReverb(ctx) {
+    try {
+      const conv = ctx.createConvolver();
+      conv.normalize = true;
+      const wet = ctx.createGain();
+      wet.gain.value = 0; // applyFxParams ramps it to the mix level
+      engine.convolver = conv;
+      engine.reverbWet = wet;
+      if (!rebuildImpulseResponse(true)) return false;
+      engine.reverbInput.connect(conv);
+      conv.connect(wet);
+      wet.connect(engine.master);
+      engine.reverbOk = true;
+      return true;
+    } catch (err) {
+      disableReverb(`setup failed: ${(err && err.name) || "error"} ${(err && err.message) || ""}`);
+      return false;
+    }
+  }
+
+  // Returns true if a valid impulse is on the convolver of the CURRENT context.
+  function rebuildImpulseResponse(initial) {
+    const ctx = engine.ctx;
+    if (!ctx || !engine.convolver || ctx.state === "closed") return false;
+    if (engine.convolver.context !== ctx) {
+      disableReverb("convolver belongs to an old audio context");
+      return false;
+    }
+    try {
+      const ir = generateImpulse(ctx, state.reverb.decay);
+      const bad = validateImpulse(ir);
+      if (bad) { disableReverb(bad); return false; }
+      engine.convolver.buffer = ir;
+      engine.irInfo = `${ir.length} samples (${ir.duration.toFixed(2)}s) x ${ir.numberOfChannels}ch @ ${ir.sampleRate} Hz`;
+      if (!initial) diag(`reverb impulse rebuilt: ${engine.irInfo}`);
+      return true;
+    } catch (err) {
+      disableReverb(`impulse failed: ${(err && err.name) || "error"} ${(err && err.message) || ""}`);
+      return false;
+    }
+  }
+
+  function reverbDiagLine(label) {
+    const t = engine.ctx ? engine.ctx.currentTime : 0;
+    const conv = engine.convolver;
+    const wet = engine.reverbWet ? engine.reverbWet.gain.value : "n/a";
+    const target = state.reverb.enabled && engine.reverbOk ? state.reverb.mix : 0;
+    diag(`${label}: reverb switch=${state.reverb.enabled ? "ON" : "OFF"} working=${engine.reverbOk} convolver buffer=${conv && conv.buffer ? `${conv.buffer.length} samples, ${conv.buffer.numberOfChannels}ch, ${conv.buffer.sampleRate} Hz, same ctx=${conv.context === engine.ctx}` : "NONE"} wet gain=${f3(wet)} (target ${f3(target)}) dry gain=${engine.dry ? f3(engine.dry.gain.value) : "n/a"} master=${engine.master ? f3(engine.master.gain.value) : "n/a"} decay=${state.reverb.decay}s at ctx ${f3(t)}`);
+  }
+
+  // Watches the output for a few hundred ms after playback starts. If adding
+  // reverb makes the output silent / NaN, or the phone can't keep up with the
+  // convolution, reverb is switched off so the dry sound comes through.
+  function reverbHealthCheck(startAt) {
+    if (!engine.reverbOk || !state.reverb.enabled || state.useMediaPlayer) return;
+    const ctx = engine.ctx;
+    const waitMs = Math.max(0, (startAt - ctx.currentTime) * 1000) + 250;
+    setTimeout(() => {
+      if (engine.ctx !== ctx || !engine.reverbOk || state.transport === "stopped") return;
+      const a = new Float32Array(engine.meter.fftSize);
+      const b = new Float32Array(engine.dryTap.fftSize);
+      let outPeak = 0; let dryPeak = 0; let nan = false; let n = 0;
+      const ct0 = ctx.currentTime; const pt0 = performance.now();
+      const iv = setInterval(() => {
+        engine.meter.getFloatTimeDomainData(a);
+        engine.dryTap.getFloatTimeDomainData(b);
+        for (let i = 0; i < a.length; i++) { const v = a[i]; if (v !== v || !Number.isFinite(v)) nan = true; else if (Math.abs(v) > outPeak) outPeak = Math.abs(v); }
+        for (let i = 0; i < b.length; i++) { const v = Math.abs(b[i]); if (v > dryPeak) dryPeak = v; }
+        if (++n < 16) return;
+        clearInterval(iv);
+        if (engine.ctx !== ctx || !engine.reverbOk) return;
+        const rate = (ctx.currentTime - ct0) / ((performance.now() - pt0) / 1000);
+        diag(`reverb check: output peak=${f3(outPeak)} dry peak=${f3(dryPeak)} NaN=${nan} audio clock speed=${f3(rate)}x`);
+        let why = "";
+        if (nan) why = "the reverb produced invalid samples (NaN)";
+        else if (dryPeak > 0.01 && outPeak < dryPeak * 0.2) why = "the output went silent with reverb on";
+        else if (state.transport !== "stopped" && rate < 0.75) why = "this phone can't keep up with the reverb (audio clock running slow)";
+        if (why) {
+          disableReverb(why);
+          engine.reverbBroken = true;
+          state.reverb.enabled = false;
+          ui.reverbEnabled.checked = false;
+          setStatus("Reverb was switched off because it silenced the sound on this phone. Playing dry.", "is-playing");
+        }
+      }, 25);
+    }, waitMs);
   }
 
   function scheduleIrRebuild() {
@@ -1183,7 +1306,7 @@ input[type="range"] {
   function applyFxParams() {
     if (!engine.ctx) return;
     const t = engine.ctx.currentTime;
-    const revWet = state.reverb.enabled ? state.reverb.mix : 0;
+    const revWet = state.reverb.enabled && engine.reverbOk ? state.reverb.mix : 0;
     const delWet = state.delay.enabled ? state.delay.mix : 0;
     const feedback = state.delay.enabled ? state.delay.feedback : 0;
     if (engine.reverbWet) engine.reverbWet.gain.setTargetAtTime(revWet, t, 0.02);
@@ -1430,11 +1553,14 @@ input[type="range"] {
     diagContext("play");
     diagDevices();
     diagTracks();
+    if (state.useMediaPlayer) diag(`play: media player mode plays the takes dry (reverb ${state.reverb.enabled ? "ON but not applied here" : "OFF"})`);
+    else reverbDiagLine("play");
     const beats = state.countInBeats;
     const tCount = ctx.currentTime + 0.05;
     const countDur = beats > 0 ? scheduleCountIn(tCount, beats, state.bpm) : 0;
     startPlaybackAt(tCount + countDur);
     startMeter();
+    reverbHealthCheck(tCount + countDur);
     if (state.useMediaPlayer) diag("play: media player mode, so the Web Audio output meter is not used; watch for 'play() resolved' / 'ended' lines");
     else measurePeakFor(Math.min(8000, (countDur + Math.min(2, sessionDuration() || 1)) * 1000 + 400), "play");
     if (beats > 0) {
@@ -2521,7 +2647,13 @@ input[type="range"] {
 
     ui.reverbEnabled.addEventListener("change", () => {
       state.reverb.enabled = ui.reverbEnabled.checked;
+      if (state.reverb.enabled && engine.ctx && !engine.reverbOk) {
+        diag("reverb switched on again: rebuilding it");
+        engine.reverbBroken = false;
+        setupReverb(engine.ctx);
+      }
       applyFxParams();
+      diag(`reverb switch ${state.reverb.enabled ? "ON" : "OFF"}`);
     });
     ui.reverbMix.addEventListener("input", () => {
       state.reverb.mix = Number(ui.reverbMix.value) / 100;
