@@ -1,0 +1,1921 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#12110f">
+  <meta name="description" content="Revamped Reverb — layer vocal harmonies in your browser.">
+  <title>Revamped Reverb</title>
+  <style>
+:root {
+  --bg: #12110f;
+  --bg-elev: #1c1b18;
+  --bg-track: #25231f;
+  --line: #34322c;
+  --text: #f3efe6;
+  --muted: #9a9488;
+  --gold: #c9a06a;
+  --play: #3dba9a;
+  --play-ink: #07241c;
+  --record: #e23d3d;
+  --record-ink: #2a0707;
+  --stop: #d7d0c4;
+  --stop-ink: #1a1814;
+  --danger: #e06b5c;
+  --shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+  --radius: 16px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  min-height: 100%;
+}
+
+body {
+  padding: 20px 16px 48px;
+  padding-bottom: max(48px, env(safe-area-inset-bottom));
+}
+
+.app {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.header {
+  text-align: center;
+  margin: 8px 0 20px;
+}
+
+.header h1 {
+  font-size: clamp(1.8rem, 5vw, 2.4rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  margin: 0 0 6px;
+}
+
+.tagline {
+  margin: 0;
+  color: var(--muted);
+  font-size: 1rem;
+}
+
+.note,
+.warning,
+.fx-note,
+.status {
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin: 0 0 16px;
+  line-height: 1.45;
+}
+
+.note {
+  background: #231f18;
+  border: 1px solid #3d3424;
+  color: #e6d3ad;
+  font-size: 0.95rem;
+}
+
+.warning {
+  background: #2a1410;
+  border: 1px solid #5a2a22;
+  color: #f0c2b8;
+}
+
+.fx-note {
+  color: var(--muted);
+  font-size: 0.88rem;
+  margin-top: -8px;
+  padding: 0 4px 16px;
+}
+
+.status {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  text-align: center;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.status.is-recording {
+  background: #2a1010;
+  border-color: #5a2222;
+  color: #ffb4b0;
+}
+
+.status.is-playing {
+  background: #10241e;
+  border-color: #1e5a48;
+  color: #b6eadb;
+}
+
+.status.is-counting {
+  background: #241c10;
+  border-color: #5a4820;
+  color: #f0d9a0;
+}
+
+.panel {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow);
+}
+
+.panel h2,
+.fx h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  letter-spacing: 0.02em;
+  font-weight: 650;
+}
+
+.clock-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.clock {
+  font-variant-numeric: tabular-nums;
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+.count-display {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--gold);
+}
+
+.button-row {
+  display: flex;
+  gap: 10px;
+}
+
+.button-row.wrap {
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.btn {
+  appearance: none;
+  border: 0;
+  border-radius: 14px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  min-height: 52px;
+  padding: 12px 16px;
+  flex: 1 1 0;
+  color: var(--text);
+  background: #2b2924;
+  transition: transform 0.08s ease, filter 0.08s ease, background 0.08s ease;
+  touch-action: manipulation;
+}
+
+.btn:hover {
+  filter: brightness(1.08);
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: none;
+  transform: none;
+}
+
+.btn:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+.btn-play {
+  background: var(--play);
+  color: var(--play-ink);
+}
+
+.btn-record {
+  background: var(--record);
+  color: #fff;
+}
+
+.btn-record.is-hot {
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.btn-stop {
+  background: var(--stop);
+  color: var(--stop-ink);
+}
+
+.btn-secondary {
+  background: #2f2c27;
+  color: var(--text);
+  flex: 1 1 140px;
+}
+
+.btn-tiny {
+  flex: 0 0 auto;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-weight: 700;
+  background: #34322c;
+}
+
+.btn-tiny.is-on {
+  background: var(--gold);
+  color: #1a140c;
+}
+
+.btn-tiny.is-solo {
+  background: #7aa0ff;
+  color: #10141c;
+}
+
+.btn-tiny.danger:hover {
+  background: #4a221c;
+  color: #ffd4ce;
+}
+
+@keyframes pulse {
+  50% { filter: brightness(1.2); }
+}
+
+.control-grid,
+.effects {
+  display: grid;
+  gap: 12px;
+}
+
+.control-grid {
+  margin-top: 16px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.effects {
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 640px) {
+  .effects {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.fx {
+  background: var(--bg-track);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.fx-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+
+.field-wide,
+.field-grow {
+  grid-column: 1 / -1;
+}
+
+.field span {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.field em {
+  font-style: normal;
+  color: var(--gold);
+  font-variant-numeric: tabular-nums;
+}
+
+.field small {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.field input[type="text"],
+.field input[type="number"],
+.field select,
+.track-name {
+  width: 100%;
+  min-height: 44px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #161512;
+  color: var(--text);
+  font: inherit;
+  padding: 8px 10px;
+}
+
+input[type="range"] {
+  width: 100%;
+  height: 36px;
+  accent-color: var(--gold);
+  cursor: pointer;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 650;
+  min-height: 44px;
+}
+
+.toggle input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--gold);
+}
+
+.track-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.track {
+  background: var(--bg-track);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.track-top {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.track-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.wave {
+  display: block;
+  width: 100%;
+  height: 64px;
+  border-radius: 8px;
+  background: #161512;
+  margin-bottom: 10px;
+}
+
+.track-sliders {
+  display: grid;
+  gap: 8px;
+}
+
+@media (min-width: 560px) {
+  .track-sliders {
+    grid-template-columns: 1.4fr 1fr 1fr;
+  }
+}
+
+.track-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.empty {
+  color: var(--muted);
+  margin: 8px 0 0;
+}
+
+.session-save {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+}
+
+.session-save .btn {
+  flex: 0 0 auto;
+  min-width: 96px;
+}
+
+.session-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.session-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  background: var(--bg-track);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px;
+}
+
+.session-meta {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.session-meta strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-meta time {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.hidden,
+[hidden] {
+  display: none !important;
+}
+
+.import-note {
+  margin-top: 0;
+}
+
+.import-label {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  cursor: pointer;
+}
+
+.import-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.show-all-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 0.92rem;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.show-all-toggle input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--gold);
+}
+
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(18, 17, 15, 0.86);
+  color: var(--gold);
+  font-size: 1.4rem;
+  font-weight: 700;
+  text-align: center;
+  padding: 24px;
+  z-index: 40;
+  border: 4px dashed var(--gold);
+  pointer-events: none;
+}
+
+.drop-overlay[hidden] {
+  display: none !important;
+}
+
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <h1>Revamped Reverb</h1>
+      <p class="tagline">Layer vocal harmonies in your browser.</p>
+    </header>
+
+    <div class="note" role="note">
+      Use headphones when stacking tracks so the microphone doesn’t pick up playback.
+    </div>
+    <div class="note import-note" role="note">
+      Open the app, then tap Import to load your .json
+    </div>
+
+    <p id="insecure-warning" class="warning" hidden>
+      Microphone access needs HTTPS or localhost. Start a local server (see the README) and open this page from there.
+    </p>
+    <p id="status" class="status" aria-live="polite">Ready</p>
+
+    <section class="panel transport" aria-label="Transport">
+      <div class="clock-row">
+        <span id="clock" class="clock">0:00.0</span>
+        <span id="count-display" class="count-display" hidden></span>
+      </div>
+
+      <div class="button-row">
+        <button type="button" id="btn-play" class="btn btn-play">Play</button>
+        <button type="button" id="btn-stop" class="btn btn-stop">Stop</button>
+        <button type="button" id="btn-record" class="btn btn-record">Record</button>
+      </div>
+
+      <div class="control-grid">
+        <label class="field">
+          <span>Count-in</span>
+          <select id="count-in">
+            <option value="0">Off</option>
+            <option value="2">2 beats</option>
+            <option value="4" selected>4 beats</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Count-in BPM</span>
+          <input id="bpm" type="number" min="40" max="240" step="1" value="120">
+        </label>
+        <label class="field field-wide">
+          <span>Latency offset <em id="latency-label">80 ms</em></span>
+          <input id="latency" type="range" min="0" max="400" step="5" value="80">
+          <small>Trimmed from the start of each new take to line up with playback.</small>
+        </label>
+      </div>
+    </section>
+
+    <section class="panel effects" aria-label="Effects">
+      <div class="fx" id="reverb-panel">
+        <div class="fx-head">
+          <h2>Reverb</h2>
+          <label class="toggle">
+            <input id="reverb-enabled" type="checkbox" checked>
+            <span>On</span>
+          </label>
+        </div>
+        <label class="field">
+          <span>Mix <em id="reverb-mix-label">25%</em></span>
+          <input id="reverb-mix" type="range" min="0" max="100" step="1" value="25">
+        </label>
+        <label class="field">
+          <span>Decay / room size <em id="reverb-decay-label">2.0 s</em></span>
+          <input id="reverb-decay" type="range" min="0.3" max="8" step="0.1" value="2.0">
+        </label>
+      </div>
+
+      <div class="fx" id="delay-panel">
+        <div class="fx-head">
+          <h2>Delay</h2>
+          <label class="toggle">
+            <input id="delay-enabled" type="checkbox">
+            <span>On</span>
+          </label>
+        </div>
+        <label class="field">
+          <span>Time <em id="delay-time-label">280 ms</em></span>
+          <input id="delay-time" type="range" min="20" max="1000" step="10" value="280">
+        </label>
+        <label class="field">
+          <span>Feedback <em id="delay-feedback-label">30%</em></span>
+          <input id="delay-feedback" type="range" min="0" max="85" step="1" value="30">
+        </label>
+        <label class="field">
+          <span>Mix <em id="delay-mix-label">20%</em></span>
+          <input id="delay-mix" type="range" min="0" max="100" step="1" value="20">
+        </label>
+      </div>
+    </section>
+
+    <p class="fx-note">Reverb and Delay color playback and monitoring only. New takes are recorded dry.</p>
+
+    <section class="panel tracks-panel" aria-label="Tracks">
+      <h2>Tracks</h2>
+      <div id="track-list" class="track-list"></div>
+      <p id="empty-tracks" class="empty">No tracks yet. Hit Record to capture your first take.</p>
+    </section>
+
+    <section class="panel sessions-panel" aria-label="Sessions">
+      <h2>Sessions</h2>
+      <div class="session-save">
+        <label class="field field-grow">
+          <span>Session name</span>
+          <input id="session-name" type="text" placeholder="Sunday stack" maxlength="80" autocomplete="off">
+        </label>
+        <button type="button" id="btn-save" class="btn btn-secondary">Save</button>
+      </div>
+      <div class="button-row wrap">
+        <button type="button" id="btn-export" class="btn btn-secondary">Export JSON</button>
+        <label class="btn btn-secondary import-label" for="import-file">
+          Import JSON
+          <input id="import-file" class="import-input" type="file" accept=".json,application/json">
+        </label>
+      </div>
+      <label class="show-all-toggle" for="import-show-all">
+        <input id="import-show-all" type="checkbox">
+        Can’t select your file? Show all files
+      </label>
+      <ul id="session-list" class="session-list"></ul>
+      <p id="empty-sessions" class="empty">No saved sessions on this device yet.</p>
+    </section>
+  </div>
+  <div id="drop-overlay" class="drop-overlay" hidden>Drop your session .json here</div>
+  <script>
+(() => {
+  "use strict";
+
+  const DB_NAME = "revamped-reverb";
+  const DB_VERSION = 1;
+  const STORE = "sessions";
+  const EXPORT_PREFIX = "revamped-reverb";
+
+  const $ = (id) => document.getElementById(id);
+
+  const ui = {
+    status: $("status"),
+    insecure: $("insecure-warning"),
+    clock: $("clock"),
+    countDisplay: $("count-display"),
+    play: $("btn-play"),
+    stop: $("btn-stop"),
+    record: $("btn-record"),
+    countIn: $("count-in"),
+    bpm: $("bpm"),
+    latency: $("latency"),
+    latencyLabel: $("latency-label"),
+    reverbEnabled: $("reverb-enabled"),
+    reverbMix: $("reverb-mix"),
+    reverbMixLabel: $("reverb-mix-label"),
+    reverbDecay: $("reverb-decay"),
+    reverbDecayLabel: $("reverb-decay-label"),
+    delayEnabled: $("delay-enabled"),
+    delayTime: $("delay-time"),
+    delayTimeLabel: $("delay-time-label"),
+    delayFeedback: $("delay-feedback"),
+    delayFeedbackLabel: $("delay-feedback-label"),
+    delayMix: $("delay-mix"),
+    delayMixLabel: $("delay-mix-label"),
+    trackList: $("track-list"),
+    emptyTracks: $("empty-tracks"),
+    sessionName: $("session-name"),
+    save: $("btn-save"),
+    exportBtn: $("btn-export"),
+    importFile: $("import-file"),
+    importShowAll: $("import-show-all"),
+    sessionList: $("session-list"),
+    emptySessions: $("empty-sessions"),
+    dropOverlay: $("drop-overlay"),
+  };
+
+  const state = {
+    tracks: [],
+    currentSessionId: null,
+    transport: "stopped", // stopped | counting | playing | recording
+    playStartedAt: 0,
+    raf: 0,
+    latencyMs: 80,
+    countInBeats: 4,
+    bpm: 120,
+    reverb: { enabled: true, mix: 0.25, decay: 2.0 },
+    delay: { enabled: false, time: 0.28, feedback: 0.3, mix: 0.2 },
+  };
+
+  const engine = {
+    ctx: null,
+    master: null,
+    dry: null,
+    reverbInput: null,
+    convolver: null,
+    reverbWet: null,
+    delayInput: null,
+    delayNode: null,
+    delayFeedback: null,
+    delayWet: null,
+    sources: [],
+    clickNodes: [],
+    recStream: null,
+    recAnalyser: null,
+    mediaRecorder: null,
+    recChunks: [],
+    recMime: "",
+    pendingStartTimer: 0,
+    recordCancelled: false,
+    recFinishResolve: null,
+    trackNodes: new Map(),
+  };
+
+  let irTimer = 0;
+  let dbPromise = null;
+
+  function nowMs() {
+    return engine.ctx ? engine.ctx.currentTime * 1000 : 0;
+  }
+
+  function formatTime(seconds) {
+    const s = Math.max(0, seconds);
+    const m = Math.floor(s / 60);
+    const rem = s - m * 60;
+    return `${m}:${rem.toFixed(1).padStart(4, "0")}`;
+  }
+
+  function setStatus(text, mode) {
+    ui.status.textContent = text;
+    ui.status.classList.remove("is-recording", "is-playing", "is-counting");
+    if (mode) ui.status.classList.add(mode);
+  }
+
+  function uid() {
+    return crypto.randomUUID ? crypto.randomUUID() : `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  function slug(name) {
+    const s = String(name || "session")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40);
+    return s || "session";
+  }
+
+  function anySolo() {
+    return state.tracks.some((t) => t.solo);
+  }
+
+  function isAudible(track) {
+    if (track.muted) return false;
+    return anySolo() ? !!track.solo : true;
+  }
+
+  function sessionDuration() {
+    let max = 0;
+    for (const t of state.tracks) {
+      if (!t.buffer) continue;
+      const offset = Math.max(0, (t.latencyOffsetMs || 0) / 1000);
+      max = Math.max(max, Math.max(0, t.buffer.duration - offset));
+    }
+    return max;
+  }
+
+  function pickMime() {
+    if (typeof MediaRecorder === "undefined") return "";
+    const types = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/mp4",
+      "audio/ogg;codecs=opus",
+      "audio/ogg",
+    ];
+    return types.find((t) => MediaRecorder.isTypeSupported(t)) || "";
+  }
+
+  async function ensureContext() {
+    if (engine.ctx) {
+      // Don't await resume(): autoplay policy can hang this promise
+      // when there is no user gesture (import, headless checks).
+      if (engine.ctx.state === "suspended") engine.ctx.resume().catch(() => {});
+      return engine.ctx;
+    }
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) throw new Error("Web Audio is not supported in this browser.");
+    const ctx = new Ctx();
+    engine.ctx = ctx;
+
+    engine.master = ctx.createGain();
+    engine.master.gain.value = 1;
+    engine.master.connect(ctx.destination);
+
+    engine.dry = ctx.createGain();
+    engine.dry.gain.value = 1;
+    engine.dry.connect(engine.master);
+
+    engine.reverbInput = ctx.createGain();
+    engine.convolver = ctx.createConvolver();
+    engine.convolver.normalize = true;
+    engine.reverbWet = ctx.createGain();
+    engine.reverbInput.connect(engine.convolver);
+    engine.convolver.connect(engine.reverbWet);
+    engine.reverbWet.connect(engine.master);
+
+    engine.delayInput = ctx.createGain();
+    engine.delayNode = ctx.createDelay(2);
+    engine.delayFeedback = ctx.createGain();
+    engine.delayWet = ctx.createGain();
+    engine.delayInput.connect(engine.delayNode);
+    engine.delayNode.connect(engine.delayWet);
+    engine.delayNode.connect(engine.delayFeedback);
+    engine.delayFeedback.connect(engine.delayNode);
+    engine.delayWet.connect(engine.master);
+
+    applyFxParams();
+    rebuildImpulseResponse();
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    return ctx;
+  }
+
+  async function unlockContext() {
+    const ctx = await ensureContext();
+    if (ctx.state === "suspended") {
+      try { await ctx.resume(); } catch (_) { /* autoplay policy */ }
+    }
+    return ctx;
+  }
+
+  function generateImpulse(ctx, decaySec) {
+    const rate = ctx.sampleRate;
+    const length = Math.max(1, Math.floor(rate * decaySec));
+    const ir = ctx.createBuffer(2, length, rate);
+    for (let ch = 0; ch < 2; ch++) {
+      const data = ir.getChannelData(ch);
+      for (let i = 0; i < length; i++) {
+        const env = Math.exp(-i / (rate * (decaySec / 3))) * (1 - i / length);
+        data[i] = (Math.random() * 2 - 1) * env;
+      }
+    }
+    return ir;
+  }
+
+  function rebuildImpulseResponse() {
+    if (!engine.ctx || !engine.convolver) return;
+    const decay = Math.max(0.15, Number(state.reverb.decay) || 2);
+    engine.convolver.buffer = generateImpulse(engine.ctx, decay);
+  }
+
+  function scheduleIrRebuild() {
+    clearTimeout(irTimer);
+    irTimer = setTimeout(rebuildImpulseResponse, 180);
+  }
+
+  function applyFxParams() {
+    if (!engine.ctx) return;
+    const t = engine.ctx.currentTime;
+    const revWet = state.reverb.enabled ? state.reverb.mix : 0;
+    const delWet = state.delay.enabled ? state.delay.mix : 0;
+    const feedback = state.delay.enabled ? state.delay.feedback : 0;
+    if (engine.reverbWet) engine.reverbWet.gain.setTargetAtTime(revWet, t, 0.02);
+    if (engine.delayWet) engine.delayWet.gain.setTargetAtTime(delWet, t, 0.02);
+    if (engine.delayFeedback) engine.delayFeedback.gain.setTargetAtTime(feedback, t, 0.02);
+    if (engine.delayNode) engine.delayNode.delayTime.setTargetAtTime(state.delay.time, t, 0.02);
+  }
+
+  function stopGraphSources() {
+    if (engine.pendingStartTimer) {
+      clearTimeout(engine.pendingStartTimer);
+      engine.pendingStartTimer = 0;
+    }
+    for (const src of engine.sources) {
+      try { src.stop(); } catch (_) { /* already stopped */ }
+      try { src.disconnect(); } catch (_) { /* */ }
+    }
+    engine.sources = [];
+    engine.trackNodes.clear();
+    for (const node of engine.clickNodes) {
+      try { node.stop(); } catch (_) { /* */ }
+      try { node.disconnect(); } catch (_) { /* */ }
+    }
+    engine.clickNodes = [];
+  }
+
+  function updateLiveTrackGains(track) {
+    const nodes = engine.trackNodes.get(track.id);
+    if (!nodes || !engine.ctx) return;
+    const t = engine.ctx.currentTime;
+    nodes.vol.gain.setTargetAtTime(track.volume, t, 0.02);
+    nodes.mute.gain.setTargetAtTime(isAudible(track) ? 1 : 0, t, 0.01);
+    nodes.revSend.gain.setTargetAtTime(track.reverbSend, t, 0.02);
+    nodes.delSend.gain.setTargetAtTime(track.delaySend, t, 0.02);
+  }
+
+  function refreshAllLiveGains() {
+    for (const track of state.tracks) updateLiveTrackGains(track);
+  }
+
+  function connectTrackSource(track, when, offsetSec) {
+    const ctx = engine.ctx;
+    const source = ctx.createBufferSource();
+    source.buffer = track.buffer;
+
+    const vol = ctx.createGain();
+    vol.gain.value = track.volume;
+
+    const mute = ctx.createGain();
+    mute.gain.value = isAudible(track) ? 1 : 0;
+
+    const revSend = ctx.createGain();
+    revSend.gain.value = track.reverbSend;
+
+    const delSend = ctx.createGain();
+    delSend.gain.value = track.delaySend;
+
+    source.connect(vol);
+    vol.connect(mute);
+    mute.connect(engine.dry);
+    mute.connect(revSend);
+    mute.connect(delSend);
+    revSend.connect(engine.reverbInput);
+    delSend.connect(engine.delayInput);
+
+    const dur = track.buffer.duration;
+    const off = Math.min(Math.max(0, offsetSec), Math.max(0, dur - 0.001));
+    source.start(when, off);
+    engine.sources.push(source);
+    engine.trackNodes.set(track.id, { source, vol, mute, revSend, delSend });
+    return source;
+  }
+
+  function startPlaybackAt(when) {
+    for (const track of state.tracks) {
+      if (!track.buffer) continue;
+      const offset = Math.max(0, (track.latencyOffsetMs || 0) / 1000);
+      connectTrackSource(track, when, offset);
+    }
+    state.playStartedAt = when;
+  }
+
+  function scheduleCountIn(startTime, beats, bpm) {
+    const ctx = engine.ctx;
+    const interval = 60 / bpm;
+    for (let i = 0; i < beats; i++) {
+      const t = startTime + i * interval;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "square";
+      osc.frequency.value = i === 0 ? 1320 : 880;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.22, t + 0.005);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
+      osc.connect(gain);
+      gain.connect(engine.master);
+      osc.start(t);
+      osc.stop(t + 0.08);
+      engine.clickNodes.push(osc);
+    }
+    return beats * interval;
+  }
+
+  function tickClock() {
+    if (state.transport === "stopped") {
+      ui.clock.textContent = formatTime(0);
+      return;
+    }
+    if (state.transport === "counting") {
+      const beats = state.countInBeats;
+      const dur = (60 / state.bpm) * beats;
+      const elapsed = engine.ctx.currentTime - state.playStartedAt;
+      if (elapsed >= dur - 0.02 && state.pendingTransport === "playing") {
+        ui.countDisplay.hidden = true;
+        state.transport = "playing";
+        state.playStartedAt = state.countEndsAt || (state.playStartedAt + dur);
+        setStatus("Playing", "is-playing");
+        ui.clock.textContent = formatTime(Math.max(0, engine.ctx.currentTime - state.playStartedAt));
+      } else {
+        const remainBeats = Math.max(1, Math.ceil((dur - elapsed) / (60 / state.bpm)));
+        ui.countDisplay.hidden = false;
+        ui.countDisplay.textContent = String(remainBeats);
+        ui.clock.textContent = formatTime(0);
+      }
+    } else {
+      ui.countDisplay.hidden = true;
+      const elapsed = engine.ctx.currentTime - state.playStartedAt;
+      ui.clock.textContent = formatTime(elapsed);
+      if (state.transport === "playing") {
+        const total = sessionDuration();
+        if (total > 0 && elapsed >= total + 0.05) {
+          stopAll("Playback finished.");
+          return;
+        }
+      }
+    }
+    state.raf = requestAnimationFrame(tickClock);
+  }
+
+  function stopAll(message) {
+    cancelAnimationFrame(state.raf);
+    const wasCounting = state.transport === "counting";
+    const recorder = engine.mediaRecorder;
+    const recorderNeverStarted = recorder && recorder.state === "inactive";
+    if (wasCounting || recorderNeverStarted) engine.recordCancelled = true;
+    stopGraphSources();
+    if (recorder && recorder.state !== "inactive") {
+      try { recorder.stop(); } catch (_) { /* */ }
+    } else if (recorderNeverStarted || wasCounting) {
+      releaseMic();
+      engine.mediaRecorder = null;
+      const resolve = engine.recFinishResolve;
+      engine.recFinishResolve = null;
+      if (resolve) resolve();
+    }
+    ui.countDisplay.hidden = true;
+    ui.record.classList.remove("is-hot");
+    const wasRecording = state.transport === "recording" || state.transport === "counting";
+    state.transport = "stopped";
+    ui.play.disabled = false;
+    ui.record.disabled = false;
+    if (!wasRecording) {
+      setStatus(message || "Stopped", null);
+    }
+    // clock left at last position until next start; reset if fully stopped after play end
+    if (message === "Playback finished.") ui.clock.textContent = formatTime(sessionDuration());
+  }
+
+  async function playAll() {
+    if (state.transport !== "stopped") return;
+    if (!state.tracks.length) {
+      setStatus("Nothing to play yet. Record a take first.");
+      return;
+    }
+    await unlockContext();
+    stopGraphSources();
+    const ctx = engine.ctx;
+    const beats = state.countInBeats;
+    const tCount = ctx.currentTime + 0.05;
+    const countDur = beats > 0 ? scheduleCountIn(tCount, beats, state.bpm) : 0;
+    startPlaybackAt(tCount + countDur);
+    if (beats > 0) {
+      state.transport = "counting";
+      state.pendingTransport = "playing";
+      state.playStartedAt = tCount;
+      state.countEndsAt = tCount + countDur;
+      setStatus("Count-in…", "is-counting");
+    } else {
+      state.transport = "playing";
+      state.pendingTransport = null;
+      state.playStartedAt = tCount;
+      setStatus("Playing", "is-playing");
+    }
+    tickClock();
+  }
+
+  async function getMicStream() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error("This browser cannot access the microphone.");
+    }
+    return navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
+    });
+  }
+
+  function releaseMic() {
+    if (engine.recStream) {
+      for (const track of engine.recStream.getTracks()) track.stop();
+      engine.recStream = null;
+    }
+  }
+
+  async function startRecording() {
+    if (state.transport !== "stopped") return;
+    await unlockContext();
+
+    let stream;
+    try {
+      stream = await getMicStream();
+    } catch (err) {
+      setStatus(err && err.name === "NotAllowedError"
+        ? "Microphone permission was denied."
+        : "Could not open the microphone.");
+      return;
+    }
+    engine.recStream = stream;
+
+    const mime = pickMime();
+    if (typeof MediaRecorder === "undefined") {
+      releaseMic();
+      setStatus("MediaRecorder is not supported in this browser.");
+      return;
+    }
+
+    engine.recChunks = [];
+    engine.recMime = mime;
+    engine.recordCancelled = false;
+    const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    engine.mediaRecorder = recorder;
+    engine.recMime = recorder.mimeType || mime || "audio/webm";
+
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size) engine.recChunks.push(e.data);
+    };
+
+    const finish = new Promise((resolve, reject) => {
+      engine.recFinishResolve = resolve;
+      recorder.onstop = () => resolve();
+      recorder.onerror = (e) => reject(e.error || new Error("Recording failed."));
+    });
+
+    stopGraphSources();
+    const ctx = engine.ctx;
+    const beats = state.countInBeats;
+    const tCount = ctx.currentTime + 0.05;
+    const countDur = beats > 0 ? scheduleCountIn(tCount, beats, state.bpm) : 0;
+    const tStart = tCount + countDur;
+
+    if (beats > 0) {
+      state.transport = "counting";
+      state.playStartedAt = tCount;
+      setStatus("Count-in…", "is-counting");
+      ui.countDisplay.hidden = false;
+      tickClock();
+    }
+
+    const waitMs = Math.max(0, (tStart - ctx.currentTime) * 1000 - 8);
+    ui.record.disabled = true;
+    ui.play.disabled = true;
+
+    engine.pendingStartTimer = window.setTimeout(() => {
+      engine.pendingStartTimer = 0;
+      if (engine.recordCancelled || engine.mediaRecorder !== recorder) return;
+      try {
+        startPlaybackAt(engine.ctx.currentTime);
+        recorder.start(100);
+        state.transport = "recording";
+        state.pendingTransport = null;
+        state.playStartedAt = engine.ctx.currentTime;
+        ui.record.classList.add("is-hot");
+        setStatus("Recording… tap Stop when you’re done.", "is-recording");
+        cancelAnimationFrame(state.raf);
+        tickClock();
+      } catch (err) {
+        releaseMic();
+        engine.mediaRecorder = null;
+        state.transport = "stopped";
+        setStatus("Could not start the recorder.");
+        ui.record.disabled = false;
+        ui.play.disabled = false;
+      }
+    }, waitMs);
+
+    try {
+      await finish;
+    } catch (err) {
+      releaseMic();
+      setStatus("Recording failed.");
+      state.transport = "stopped";
+      ui.record.classList.remove("is-hot");
+      ui.record.disabled = false;
+      ui.play.disabled = false;
+      return;
+    }
+
+    engine.recFinishResolve = null;
+
+    if (engine.recordCancelled && !engine.recChunks.length) {
+      releaseMic();
+      engine.mediaRecorder = null;
+      ui.record.classList.remove("is-hot");
+      ui.record.disabled = false;
+      ui.play.disabled = false;
+      setStatus("Stopped");
+      return;
+    }
+
+    releaseMic();
+    ui.record.classList.remove("is-hot");
+    const chunks = engine.recChunks.slice();
+    const type = engine.recMime || "audio/webm";
+    engine.mediaRecorder = null;
+    engine.recChunks = [];
+
+    if (!chunks.length) {
+      setStatus("Recording was empty. Try again?");
+      state.transport = "stopped";
+      ui.record.disabled = false;
+      ui.play.disabled = false;
+      return;
+    }
+
+    const blob = new Blob(chunks, { type });
+    try {
+      const buffer = await decodeBlob(blob);
+      const index = state.tracks.length + 1;
+      state.tracks.push({
+        id: uid(),
+        name: `Track ${index}`,
+        blob,
+        buffer,
+        mimeType: type,
+        volume: 1,
+        muted: false,
+        solo: false,
+        latencyOffsetMs: state.latencyMs,
+        reverbSend: 0.35,
+        delaySend: 0.2,
+      });
+      renderTracks();
+      setStatus(`Captured ${buffer.duration.toFixed(1)}s as Track ${index}.`);
+    } catch (err) {
+      setStatus("Could not decode that take. Try another browser or check the mic.");
+    }
+    state.transport = "stopped";
+    stopGraphSources();
+    ui.record.disabled = false;
+    ui.play.disabled = false;
+    cancelAnimationFrame(state.raf);
+    ui.countDisplay.hidden = true;
+  }
+
+  async function decodeBlob(blob) {
+    const ctx = await ensureContext();
+    const arr = await blob.arrayBuffer();
+    const copy = arr.slice(0);
+    return await new Promise((resolve, reject) => {
+      let settled = false;
+      const ok = (buf) => { if (!settled) { settled = true; resolve(buf); } };
+      const fail = (e) => { if (!settled) { settled = true; reject(e || new Error("decode failed")); } };
+      try {
+        const ret = ctx.decodeAudioData(copy, ok, fail);
+        if (ret && typeof ret.then === "function") ret.then(ok, fail);
+      } catch (err) {
+        fail(err);
+      }
+    });
+  }
+
+  function drawWaveform(canvas, buffer) {
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+    const height = Math.max(1, Math.floor(64 * dpr));
+    canvas.width = width;
+    canvas.height = height;
+    const g = canvas.getContext("2d");
+    g.fillStyle = "#161512";
+    g.fillRect(0, 0, width, height);
+    if (!buffer) return;
+    const data = buffer.getChannelData(0);
+    const step = Math.max(1, Math.floor(data.length / width));
+    const mid = height / 2;
+    g.fillStyle = "#c9a06a";
+    for (let x = 0; x < width; x++) {
+      const start = x * step;
+      let min = 1;
+      let max = -1;
+      for (let i = 0; i < step; i++) {
+        const v = data[start + i] || 0;
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+      const y1 = mid + min * mid;
+      const y2 = mid + max * mid;
+      g.fillRect(x, y1, 1, Math.max(1, y2 - y1));
+    }
+  }
+
+  function renderTracks() {
+    ui.trackList.innerHTML = "";
+    ui.emptyTracks.hidden = state.tracks.length > 0;
+    state.tracks.forEach((track) => {
+      const el = document.createElement("article");
+      el.className = "track";
+      el.dataset.id = track.id;
+      el.innerHTML = `
+        <div class="track-top">
+          <input class="track-name" type="text" maxlength="60" value="">
+          <button type="button" class="btn btn-tiny btn-mute ${track.muted ? "is-on" : ""}" aria-pressed="${track.muted}">M</button>
+          <button type="button" class="btn btn-tiny btn-solo ${track.solo ? "is-solo" : ""}" aria-pressed="${track.solo}">S</button>
+          <button type="button" class="btn btn-tiny danger btn-del" title="Delete track">Delete</button>
+        </div>
+        <canvas class="wave" aria-hidden="true"></canvas>
+        <div class="track-sliders">
+          <label class="field">
+            <span>Volume <em>${Math.round(track.volume * 100)}%</em></span>
+            <input class="vol" type="range" min="0" max="200" step="1" value="${Math.round(track.volume * 100)}">
+          </label>
+          <label class="field">
+            <span>Reverb send <em>${Math.round(track.reverbSend * 100)}%</em></span>
+            <input class="rev-send" type="range" min="0" max="100" step="1" value="${Math.round(track.reverbSend * 100)}">
+          </label>
+          <label class="field">
+            <span>Delay send <em>${Math.round(track.delaySend * 100)}%</em></span>
+            <input class="del-send" type="range" min="0" max="100" step="1" value="${Math.round(track.delaySend * 100)}">
+          </label>
+        </div>
+      `;
+      const nameInput = el.querySelector(".track-name");
+      nameInput.value = track.name;
+      nameInput.addEventListener("input", () => {
+        track.name = nameInput.value.slice(0, 60);
+      });
+      el.querySelector(".btn-mute").addEventListener("click", () => {
+        track.muted = !track.muted;
+        renderTracks();
+        refreshAllLiveGains();
+      });
+      el.querySelector(".btn-solo").addEventListener("click", () => {
+        track.solo = !track.solo;
+        renderTracks();
+        refreshAllLiveGains();
+      });
+      el.querySelector(".btn-del").addEventListener("click", () => {
+        if (!confirm(`Delete “${track.name}”?`)) return;
+        const nodes = engine.trackNodes.get(track.id);
+        if (nodes && nodes.source) {
+          try { nodes.source.stop(); } catch (_) { /* */ }
+        }
+        engine.trackNodes.delete(track.id);
+        state.tracks = state.tracks.filter((t) => t.id !== track.id);
+        renderTracks();
+      });
+      const bindSlider = (sel, key, labelSuffix) => {
+        const input = el.querySelector(sel);
+        const label = input.previousElementSibling.querySelector("em");
+        input.addEventListener("input", () => {
+          const v = Number(input.value) / 100;
+          track[key] = v;
+          label.textContent = `${Math.round(v * 100)}${labelSuffix}`;
+          updateLiveTrackGains(track);
+        });
+      };
+      bindSlider(".vol", "volume", "%");
+      bindSlider(".rev-send", "reverbSend", "%");
+      bindSlider(".del-send", "delaySend", "%");
+      ui.trackList.appendChild(el);
+      const canvas = el.querySelector(".wave");
+      requestAnimationFrame(() => drawWaveform(canvas, track.buffer));
+    });
+  }
+
+  function openDb() {
+    if (dbPromise) return dbPromise;
+    dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(STORE)) {
+          db.createObjectStore(STORE, { keyPath: "id" });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    return dbPromise;
+  }
+
+  function idbReq(req) {
+    return new Promise((resolve, reject) => {
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function listSessions() {
+    const db = await openDb();
+    const tx = db.transaction(STORE, "readonly");
+    const rows = await idbReq(tx.objectStore(STORE).getAll());
+    return (rows || []).sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+  }
+
+  async function putSession(record) {
+    const db = await openDb();
+    const tx = db.transaction(STORE, "readwrite");
+    await idbReq(tx.objectStore(STORE).put(record));
+  }
+
+  async function getSession(id) {
+    const db = await openDb();
+    const tx = db.transaction(STORE, "readonly");
+    return idbReq(tx.objectStore(STORE).get(id));
+  }
+
+  async function deleteSession(id) {
+    const db = await openDb();
+    const tx = db.transaction(STORE, "readwrite");
+    await idbReq(tx.objectStore(STORE).delete(id));
+  }
+
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = String(reader.result || "");
+        const comma = result.indexOf(",");
+        resolve(comma >= 0 ? result.slice(comma + 1) : result);
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  function base64ToBlob(b64, mimeType) {
+    const binary = atob(b64);
+    const len = binary.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: mimeType || "audio/webm" });
+  }
+
+  function fxSnapshot() {
+    return {
+      reverb: { ...state.reverb },
+      delay: { ...state.delay },
+      latencyMs: state.latencyMs,
+      countInBeats: state.countInBeats,
+      bpm: state.bpm,
+    };
+  }
+
+  async function serializeTracks() {
+    const tracks = [];
+    for (const t of state.tracks) {
+      tracks.push({
+        id: t.id,
+        name: t.name,
+        volume: t.volume,
+        muted: t.muted,
+        solo: t.solo,
+        latencyOffsetMs: t.latencyOffsetMs,
+        reverbSend: t.reverbSend,
+        delaySend: t.delaySend,
+        mimeType: t.mimeType,
+        audioBase64: await blobToBase64(t.blob),
+      });
+    }
+    return tracks;
+  }
+
+  async function tracksFromSerialized(rows) {
+    const out = [];
+    for (const row of rows || []) {
+      if (!row || !row.audioBase64) continue;
+      const blob = base64ToBlob(row.audioBase64, row.mimeType || "audio/webm");
+      const buffer = await decodeBlob(blob);
+      out.push({
+        id: row.id || uid(),
+        name: row.name || `Track ${out.length + 1}`,
+        blob,
+        buffer,
+        mimeType: row.mimeType || blob.type,
+        volume: Number.isFinite(row.volume) ? row.volume : 1,
+        muted: !!row.muted,
+        solo: !!row.solo,
+        latencyOffsetMs: Number.isFinite(row.latencyOffsetMs) ? row.latencyOffsetMs : 0,
+        reverbSend: Number.isFinite(row.reverbSend) ? row.reverbSend : 0.35,
+        delaySend: Number.isFinite(row.delaySend) ? row.delaySend : 0.2,
+      });
+    }
+    return out;
+  }
+
+  function applyFxFrom(data) {
+    if (data.reverb) {
+      state.reverb.enabled = !!data.reverb.enabled;
+      if (Number.isFinite(data.reverb.mix)) state.reverb.mix = data.reverb.mix;
+      if (Number.isFinite(data.reverb.decay)) state.reverb.decay = data.reverb.decay;
+    }
+    if (data.delay) {
+      state.delay.enabled = !!data.delay.enabled;
+      if (Number.isFinite(data.delay.time)) state.delay.time = data.delay.time;
+      if (Number.isFinite(data.delay.feedback)) state.delay.feedback = data.delay.feedback;
+      if (Number.isFinite(data.delay.mix)) state.delay.mix = data.delay.mix;
+    }
+    if (Number.isFinite(data.latencyMs)) state.latencyMs = data.latencyMs;
+    if (Number.isFinite(data.countInBeats)) state.countInBeats = data.countInBeats;
+    if (Number.isFinite(data.bpm)) state.bpm = data.bpm;
+    syncFxControls();
+    applyFxParams();
+    rebuildImpulseResponse();
+  }
+
+  function syncFxControls() {
+    ui.reverbEnabled.checked = state.reverb.enabled;
+    ui.reverbMix.value = String(Math.round(state.reverb.mix * 100));
+    ui.reverbMixLabel.textContent = `${Math.round(state.reverb.mix * 100)}%`;
+    ui.reverbDecay.value = String(state.reverb.decay);
+    ui.reverbDecayLabel.textContent = `${Number(state.reverb.decay).toFixed(1)} s`;
+    ui.delayEnabled.checked = state.delay.enabled;
+    ui.delayTime.value = String(Math.round(state.delay.time * 1000));
+    ui.delayTimeLabel.textContent = `${Math.round(state.delay.time * 1000)} ms`;
+    ui.delayFeedback.value = String(Math.round(state.delay.feedback * 100));
+    ui.delayFeedbackLabel.textContent = `${Math.round(state.delay.feedback * 100)}%`;
+    ui.delayMix.value = String(Math.round(state.delay.mix * 100));
+    ui.delayMixLabel.textContent = `${Math.round(state.delay.mix * 100)}%`;
+    ui.latency.value = String(state.latencyMs);
+    ui.latencyLabel.textContent = `${state.latencyMs} ms`;
+    ui.countIn.value = String(state.countInBeats);
+    ui.bpm.value = String(state.bpm);
+  }
+
+  async function saveCurrentSession() {
+    if (!state.tracks.length) {
+      setStatus("Record something before saving a session.");
+      return;
+    }
+    const name = (ui.sessionName.value || "").trim() || `Session ${new Date().toLocaleString()}`;
+    ui.sessionName.value = name;
+    const record = {
+      id: state.currentSessionId || uid(),
+      name,
+      savedAt: Date.now(),
+      tracks: await serializeTracks(),
+      ...fxSnapshot(),
+    };
+    await putSession(record);
+    state.currentSessionId = record.id;
+    await renderSessions();
+    setStatus(`Saved “${name}” on this device.`);
+  }
+
+  async function loadSession(id) {
+    if (state.transport !== "stopped") stopAll();
+    const rec = await getSession(id);
+    if (!rec) {
+      setStatus("That session is missing.");
+      return;
+    }
+    state.tracks = await tracksFromSerialized(rec.tracks);
+    state.currentSessionId = rec.id;
+    ui.sessionName.value = rec.name || "";
+    applyFxFrom(rec);
+    renderTracks();
+    setStatus(`Loaded “${rec.name}” (${state.tracks.length} track${state.tracks.length === 1 ? "" : "s"}).`);
+  }
+
+  async function renderSessions() {
+    let rows = [];
+    try {
+      rows = await listSessions();
+    } catch (err) {
+      setStatus("Could not open IndexedDB for saved sessions.");
+      return;
+    }
+    ui.sessionList.innerHTML = "";
+    ui.emptySessions.hidden = rows.length > 0;
+    for (const row of rows) {
+      const li = document.createElement("li");
+      li.className = "session-item";
+      const saved = row.savedAt ? new Date(row.savedAt) : null;
+      const when = saved
+        ? saved.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+        : "";
+      li.innerHTML = `
+        <div class="session-meta">
+          <strong></strong>
+          <time></time>
+        </div>
+        <button type="button" class="btn btn-tiny btn-load">Load</button>
+        <button type="button" class="btn btn-tiny danger btn-forget">Delete</button>
+      `;
+      li.querySelector("strong").textContent = row.name || "Untitled";
+      li.querySelector("time").textContent = when;
+      li.querySelector(".btn-load").addEventListener("click", () => loadSession(row.id));
+      li.querySelector(".btn-forget").addEventListener("click", async () => {
+        if (!confirm(`Delete saved session “${row.name}”?`)) return;
+        await deleteSession(row.id);
+        if (state.currentSessionId === row.id) state.currentSessionId = null;
+        await renderSessions();
+        setStatus("Session deleted.");
+      });
+      ui.sessionList.appendChild(li);
+    }
+  }
+
+  async function exportSession() {
+    if (!state.tracks.length) {
+      setStatus("Nothing to export yet.");
+      return;
+    }
+    const name = (ui.sessionName.value || "").trim() || "session";
+    const payload = {
+      app: "Revamped Reverb",
+      version: 1,
+      name,
+      exportedAt: new Date().toISOString(),
+      tracks: await serializeTracks(),
+      ...fxSnapshot(),
+    };
+    const json = JSON.stringify(payload);
+    const blob = new Blob([json], { type: "application/json" });
+    const stamp = new Date().toISOString().slice(0, 10);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${EXPORT_PREFIX}-${slug(name)}-${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 1000);
+    setStatus(`Exported ${a.download}.`);
+  }
+
+  function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(reader.error || new Error("Could not read that file."));
+      reader.readAsText(file);
+    });
+  }
+
+  function parseSessionText(raw) {
+    const text = String(raw || "").replace(/^\uFEFF/, "").trim();
+    if (!text) {
+      throw new Error("That file is empty.");
+    }
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (_) {
+      throw new Error("That file is not valid JSON. Export a session from Revamped Reverb and try that file.");
+    }
+    if (!data || typeof data !== "object" || Array.isArray(data) || !Array.isArray(data.tracks)) {
+      throw new Error("That JSON is not a Revamped Reverb session. It needs a tracks list from this app’s Export.");
+    }
+    return data;
+  }
+
+  async function applySessionData(data, fallbackName) {
+    if (state.transport !== "stopped") stopAll();
+    try {
+      state.tracks = await tracksFromSerialized(data.tracks);
+    } catch (err) {
+      throw new Error("The session JSON opened, but the audio takes could not be decoded.");
+    }
+    if (!state.tracks.length) {
+      throw new Error("That session JSON has no playable audio takes.");
+    }
+    state.currentSessionId = null;
+    ui.sessionName.value = data.name || fallbackName || "Imported session";
+    applyFxFrom(data);
+    renderTracks();
+    setStatus(`Imported “${ui.sessionName.value}” (${state.tracks.length} track${state.tracks.length === 1 ? "" : "s"}).`);
+  }
+
+  async function importSessionFile(file) {
+    if (!file) {
+      setStatus("No file was selected.");
+      return;
+    }
+    let raw;
+    try {
+      raw = await readFileAsText(file);
+    } catch (_) {
+      setStatus("Could not read that file. Try a different copy of your .json export.");
+      return;
+    }
+    let data;
+    try {
+      data = parseSessionText(raw);
+    } catch (err) {
+      setStatus(err.message || "Could not open that file.");
+      return;
+    }
+    const fallback = (file.name || "").replace(/\.json$/i, "") || "Imported session";
+    try {
+      await applySessionData(data, fallback);
+    } catch (err) {
+      setStatus(err.message || "Import failed.");
+    }
+  }
+
+  function isLikelySessionFile(file) {
+    if (!file) return false;
+    const name = (file.name || "").toLowerCase();
+    const type = (file.type || "").toLowerCase();
+    if (name.endsWith(".json")) return true;
+    if (type.includes("json") || type === "text/plain" || type === "application/octet-stream" || !type) return true;
+    return false;
+  }
+
+  function bindDropImport() {
+    let dragDepth = 0;
+    const showOverlay = (on) => {
+      if (ui.dropOverlay) ui.dropOverlay.hidden = !on;
+    };
+    window.addEventListener("dragenter", (e) => {
+      e.preventDefault();
+      dragDepth += 1;
+      showOverlay(true);
+    });
+    window.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    });
+    window.addEventListener("dragleave", (e) => {
+      e.preventDefault();
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) showOverlay(false);
+    });
+    window.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dragDepth = 0;
+      showOverlay(false);
+      const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!file) {
+        setStatus("Drop a Revamped Reverb .json export to load it.");
+        return;
+      }
+      if (!isLikelySessionFile(file)) {
+        setStatus("Drop a .json session export from this app.");
+        return;
+      }
+      importSessionFile(file);
+    });
+  }
+
+  function snapshotForTest() {
+    return {
+      name: ui.sessionName.value,
+      latencyMs: state.latencyMs,
+      countInBeats: state.countInBeats,
+      bpm: state.bpm,
+      reverb: { ...state.reverb },
+      delay: { ...state.delay },
+      tracks: state.tracks.map((t) => ({
+        id: t.id,
+        name: t.name,
+        volume: t.volume,
+        muted: t.muted,
+        solo: t.solo,
+        latencyOffsetMs: t.latencyOffsetMs,
+        reverbSend: t.reverbSend,
+        delaySend: t.delaySend,
+        mimeType: t.mimeType,
+        duration: t.buffer ? t.buffer.duration : 0,
+        sampleRate: t.buffer ? t.buffer.sampleRate : 0,
+      })),
+      status: ui.status.textContent,
+    };
+  }
+
+  function bindControls() {
+    ui.play.addEventListener("click", () => {
+      playAll().catch((e) => setStatus(e.message || "Playback failed."));
+    });
+    ui.stop.addEventListener("click", () => {
+      if (state.transport === "stopped") {
+        ui.clock.textContent = formatTime(0);
+        setStatus("Ready");
+        return;
+      }
+      stopAll("Stopped");
+    });
+    ui.record.addEventListener("click", () => {
+      startRecording().catch((e) => setStatus(e.message || "Recording failed."));
+    });
+
+    ui.latency.addEventListener("input", () => {
+      state.latencyMs = Number(ui.latency.value);
+      ui.latencyLabel.textContent = `${state.latencyMs} ms`;
+    });
+    ui.countIn.addEventListener("change", () => {
+      state.countInBeats = Number(ui.countIn.value) || 0;
+    });
+    ui.bpm.addEventListener("change", () => {
+      const v = Math.min(240, Math.max(40, Number(ui.bpm.value) || 120));
+      state.bpm = v;
+      ui.bpm.value = String(v);
+    });
+
+    ui.reverbEnabled.addEventListener("change", () => {
+      state.reverb.enabled = ui.reverbEnabled.checked;
+      applyFxParams();
+    });
+    ui.reverbMix.addEventListener("input", () => {
+      state.reverb.mix = Number(ui.reverbMix.value) / 100;
+      ui.reverbMixLabel.textContent = `${ui.reverbMix.value}%`;
+      applyFxParams();
+    });
+    ui.reverbDecay.addEventListener("input", () => {
+      state.reverb.decay = Number(ui.reverbDecay.value);
+      ui.reverbDecayLabel.textContent = `${Number(ui.reverbDecay.value).toFixed(1)} s`;
+      scheduleIrRebuild();
+    });
+
+    ui.delayEnabled.addEventListener("change", () => {
+      state.delay.enabled = ui.delayEnabled.checked;
+      applyFxParams();
+    });
+    ui.delayTime.addEventListener("input", () => {
+      state.delay.time = Number(ui.delayTime.value) / 1000;
+      ui.delayTimeLabel.textContent = `${ui.delayTime.value} ms`;
+      applyFxParams();
+    });
+    ui.delayFeedback.addEventListener("input", () => {
+      state.delay.feedback = Number(ui.delayFeedback.value) / 100;
+      ui.delayFeedbackLabel.textContent = `${ui.delayFeedback.value}%`;
+      applyFxParams();
+    });
+    ui.delayMix.addEventListener("input", () => {
+      state.delay.mix = Number(ui.delayMix.value) / 100;
+      ui.delayMixLabel.textContent = `${ui.delayMix.value}%`;
+      applyFxParams();
+    });
+
+    ui.save.addEventListener("click", () => {
+      saveCurrentSession().catch(() => setStatus("Could not save the session."));
+    });
+    ui.exportBtn.addEventListener("click", () => {
+      exportSession().catch(() => setStatus("Could not export the session."));
+    });
+    ui.importFile.addEventListener("change", (event) => {
+      const file = event.target.files && event.target.files[0];
+      event.target.value = "";
+      if (file) importSessionFile(file);
+    });
+    if (ui.importShowAll) {
+      ui.importShowAll.addEventListener("change", () => {
+        ui.importFile.accept = ui.importShowAll.checked ? "*/*" : ".json,application/json";
+      });
+    }
+    bindDropImport();
+
+    window.addEventListener("resize", () => {
+      for (const canvas of ui.trackList.querySelectorAll("canvas.wave")) {
+        const id = canvas.closest(".track")?.dataset.id;
+        const track = state.tracks.find((t) => t.id === id);
+        if (track) drawWaveform(canvas, track.buffer);
+      }
+    });
+  }
+
+  async function init() {
+    if (!window.isSecureContext) {
+      ui.insecure.hidden = false;
+    }
+    syncFxControls();
+    bindControls();
+    renderTracks();
+    try {
+      await renderSessions();
+    } catch (_) {
+      // IndexedDB may be blocked in some private modes.
+    }
+    setStatus("Ready");
+    window.__revampedReverbTest = {
+      snapshot: snapshotForTest,
+      async exportPayload() {
+        return {
+          app: "Revamped Reverb",
+          version: 1,
+          name: (ui.sessionName.value || "").trim() || "session",
+          tracks: await serializeTracks(),
+          ...fxSnapshot(),
+        };
+      },
+      async importPayload(data) {
+        await applySessionData(data, "Imported session");
+        return snapshotForTest();
+      },
+    };
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();
+
+  </script>
+</body>
+</html>

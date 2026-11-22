@@ -1,0 +1,1172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#05070c">
+  <meta name="description" content="Live tracker of active Earth satellites from CelesTrak GP data, propagated with SGP4.">
+  <title>Sat Tracker</title>
+  <style>
+/* sat-tracker */
+:root {
+  --bg: #05070c;
+  --panel: rgba(8, 12, 22, 0.82);
+  --stroke: rgba(180, 210, 255, 0.16);
+  --text: #e8eef8;
+  --muted: #8b97ad;
+  --accent: #7eb8ff;
+  --danger: #ff6b7a;
+  --ok: #7dcea0;
+  --shadow: 0 10px 40px rgba(0,0,0,.45);
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font-family: var(--font); overflow: hidden; touch-action: none;
+}
+canvas { display: block; width: 100%; height: 100%; position: fixed; inset: 0; }
+#ui { position: fixed; inset: 0; pointer-events: none; z-index: 2; }
+#ui > * { pointer-events: auto; }
+.topbar, .panel, .hint, .toast, .card, .timebar {
+  background: var(--panel);
+  border: 1px solid var(--stroke);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: var(--shadow);
+}
+.topbar {
+  position: absolute; top: 12px; left: 12px; right: 12px;
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px; padding: 10px 14px; border-radius: 14px; flex-wrap: wrap;
+}
+.brand { min-width: 160px; }
+.brand h1 {
+  margin: 0; font-size: 15px; font-weight: 650; letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.brand p { margin: 2px 0 0; font-size: 11px; color: var(--muted); }
+.status { text-align: right; font-size: 11px; color: var(--muted); line-height: 1.45; flex: 1; }
+.status strong { color: var(--text); font-weight: 600; }
+.status.error { color: var(--danger); }
+.status a { color: var(--accent); }
+button, .btn {
+  appearance: none; border: 1px solid var(--stroke); background: rgba(126,184,255,.12);
+  color: var(--text); border-radius: 8px; padding: 6px 10px; font: inherit;
+  font-size: 12px; cursor: pointer; color: var(--accent);
+}
+button:disabled { opacity: .45; cursor: not-allowed; }
+button:not(:disabled):hover { background: rgba(126,184,255,.22); }
+.timebar {
+  position: absolute; left: 12px; right: 12px; bottom: 12px;
+  display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+  border-radius: 14px; font-size: 12px; flex-wrap: wrap;
+}
+.timebar label { color: var(--muted); white-space: nowrap; }
+.timebar input[type=range] { flex: 1; min-width: 120px; accent-color: var(--accent); }
+#simClock { font-variant-numeric: tabular-nums; color: var(--text); min-width: 11.5em; }
+.panel {
+  position: absolute; top: 76px; left: 12px; width: 250px; max-height: calc(100% - 150px);
+  overflow: auto; padding: 10px 10px 8px; border-radius: 14px; font-size: 12px;
+}
+.panel h2 {
+  margin: 0 0 8px; font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); font-weight: 650;
+}
+.row {
+  display: flex; align-items: center; gap: 8px; padding: 4px 2px; cursor: pointer;
+  user-select: none; border-radius: 8px;
+}
+.row:hover { background: rgba(255,255,255,.04); }
+.row input { margin: 0; accent-color: var(--accent); }
+.swatch { width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 0 2px rgba(255,255,255,.08); flex: 0 0 9px; }
+.row .name { flex: 1; }
+.row .count { color: var(--muted); font-variant-numeric: tabular-nums; }
+#togglePanel {
+  display: none; position: absolute; top: 76px; left: 12px;
+}
+.card {
+  position: absolute; right: 12px; top: 76px; width: min(280px, calc(100% - 24px));
+  padding: 12px 14px; border-radius: 14px; display: none;
+}
+.card.visible { display: block; }
+.card .k { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+.card h3 { margin: 2px 0 8px; font-size: 15px; font-weight: 650; }
+.card dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 12px; }
+.card dt { color: var(--muted); }
+.card dd { margin: 0; font-variant-numeric: tabular-nums; }
+.card .close { position: absolute; top: 8px; right: 8px; padding: 2px 7px; }
+.toast {
+  position: absolute; left: 50%; bottom: 70px; transform: translateX(-50%);
+  padding: 8px 12px; border-radius: 10px; font-size: 12px; max-width: min(420px, calc(100% - 24px));
+  display: none; text-align: center;
+}
+.toast.visible { display: block; }
+.hint {
+  position: absolute; right: 12px; bottom: 70px; padding: 6px 10px; border-radius: 10px;
+  font-size: 10px; color: var(--muted); max-width: 180px; text-align: right; line-height: 1.4;
+}
+.credit { margin-top: 8px; font-size: 10px; color: var(--muted); line-height: 1.4; }
+.credit a { color: var(--accent); }
+#loader {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  flex-direction: column; gap: 10px; background: rgba(5,7,12,.55); pointer-events: none;
+  font-size: 13px; color: var(--muted);
+}
+#loader .orb {
+  width: 36px; height: 36px; border: 2px solid var(--stroke); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 1s linear infinite;
+}
+#loader.hidden { display: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 680px) {
+  .panel {
+    top: auto; bottom: 64px; left: 12px; right: 12px; width: auto; max-height: 36vh;
+    display: none;
+  }
+  .panel.open { display: block; }
+  #togglePanel { display: block; }
+  .card { top: auto; bottom: 64px; right: 12px; left: 12px; width: auto; }
+  .hint { display: none; }
+  .topbar { padding: 8px 10px; }
+  .timebar { bottom: 8px; left: 8px; right: 8px; }
+}
+
+  </style>
+</head>
+<body>
+  <canvas id="c" aria-label="Orthographic view of Earth and active satellites"></canvas>
+  <div id="ui">
+    <div class="topbar">
+      <div class="brand">
+        <h1>Sat Tracker</h1>
+        <p>Active satellites · live SGP4</p>
+      </div>
+      <div id="status" class="status">Loading…</div>
+      <button type="button" id="refreshBtn" title="Refetch from CelesTrak if the 2-hour cache has expired">Refresh</button>
+    </div>
+    <button type="button" id="togglePanel">Filters</button>
+    <aside class="panel" id="panel">
+      <h2>Filters</h2>
+      <div id="filters"></div>
+      <p class="credit">Orbit data from <a href="https://celestrak.org/NORAD/elements/" target="_blank" rel="noopener">CelesTrak</a> (GP, updated ~every 2 hours). Propagated with <a href="https://github.com/shashwatak/satellite-js" target="_blank" rel="noopener">satellite.js</a> (MIT). Not for operational use.</p>
+    </aside>
+    <div class="card" id="card">
+      <button type="button" class="close" id="cardClose" aria-label="Close">×</button>
+      <div class="k">Selected satellite</div>
+      <h3 id="cardName">—</h3>
+      <dl>
+        <dt>NORAD ID</dt><dd id="cardId">—</dd>
+        <dt>Altitude</dt><dd id="cardAlt">—</dd>
+        <dt>Radius</dt><dd id="cardR">—</dd>
+        <dt>Group</dt><dd id="cardGroup">—</dd>
+      </dl>
+    </div>
+    <div class="hint">Drag to rotate · pinch or scroll to zoom · tap a dot for details. ISS is the gold ring.</div>
+    <div class="toast" id="toast" role="status"></div>
+    <div class="timebar">
+      <button type="button" id="nowBtn">Now</button>
+      <span id="simClock">—</span>
+      <label for="speed">Speed <span id="speedVal">1×</span></label>
+      <input id="speed" type="range" min="0" max="1000" value="0" step="1">
+    </div>
+    <div id="loader"><div class="orb"></div><div id="loaderText">Loading catalog…</div></div>
+  </div>
+  <script id="satellite-js">
+/* satellite.js v7.2.0
+ * MIT License
+ * Copyright (C) 2013 Shashwat Kandadai, UCSC Jack Baskin School of Engineering
+ * https://github.com/shashwatak/satellite-js
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+
+"use strict";var satellite=(()=>{var Io=Object.defineProperty;var hs=Object.getOwnPropertyDescriptor;var xs=Object.getOwnPropertyNames;var fs=Object.prototype.hasOwnProperty;var us=(o,s)=>{for(var n in s)Io(o,n,{get:s[n],enumerable:!0})},gs=(o,s,n,m)=>{if(s&&typeof s=="object"||typeof s=="function")for(let e of xs(s))!fs.call(o,e)&&e!==n&&Io(o,e,{get:()=>s[e],enumerable:!(m=hs(s,e))||m.enumerable});return o};var zs=o=>gs(Io({},"__esModule",{value:!0}),o);var Ns={};us(Ns,{earthRadius:()=>Tt,eciToEcf:()=>No,eciToEcfVelocity:()=>es,eciToGeodetic:()=>ss,geodeticToEcf:()=>os,gstime:()=>go,invjday:()=>So,jday:()=>Gt,json2satrec:()=>Ko,propagate:()=>_o,sgp4:()=>co,twoline2satrec:()=>Jo});var qt=Math.PI,v=qt*2,jt=qt/180,Ms=180/qt,$o=1440,ys=398600.8,Tt=6378.135,Bt=60/Math.sqrt(Tt*Tt*Tt/ys),Mo=Tt*Bt/60,jo=1/Bt,Vt=.001082616,bs=-253881e-11,Bo=-165597e-11,Jt=bs/Vt,Kt=2/3,no=1440/(2*qt);function yo(o,s){let n=[31,o%4===0?29:28,31,30,31,30,31,31,30,31,30,31],m=Math.floor(s),e=1,d=0;for(;m>d+n[e-1]&&e<12;)d+=n[e-1],e+=1;let h=e,u=m-d,c=(s-m)*24,z=Math.floor(c);c=(c-z)*60;let p=Math.floor(c),x=(c-p)*60;return{mon:h,day:u,hr:z,minute:p,sec:x}}function Fo(o,s,n,m,e,d,h=0){return 367*o-Math.floor(7*(o+Math.floor((s+9)/12))*.25)+Math.floor(275*s/9)+n+17210135e-1+((h/6e4+d/60+e)/60+m)/24}function Gt(o,s,n,m,e,d,h=0){if(o instanceof Date){let u=o;return Fo(u.getUTCFullYear(),u.getUTCMonth()+1,u.getUTCDate(),u.getUTCHours(),u.getUTCMinutes(),u.getUTCSeconds(),u.getUTCMilliseconds())}return Fo(o,s,n,m,e,d,h)}function So(o,s){let n=o-24150195e-1,m=n/365.25,e=1900+Math.floor(m),d=Math.floor((e-1901)*.25),h=n-((e-1900)*365+d)+1e-11;h<1&&(e-=1,d=Math.floor((e-1901)*.25),h=n-((e-1900)*365+d));let u=yo(e,h),{mon:c,day:z,hr:p,minute:x}=u,C=Math.round(u.sec*1e3),f=new Date(Date.UTC(e,c-1,z,p,x,0,C));return s?[f.getUTCFullYear(),f.getUTCMonth()+1,f.getUTCDate(),f.getUTCHours(),f.getUTCMinutes(),f.getUTCSeconds()]:f}function bo(o,s){let{e3:n,ee2:m,peo:e,pgho:d,pho:h,pinco:u,plo:c,se2:z,se3:p,sgh2:x,sgh3:C,sgh4:f,sh2:_,sh3:H,si2:D,si3:N,sl2:$,sl3:L,sl4:Z,t:w,xgh2:i,xgh3:g,xgh4:E,xh2:P,xh3:Q,xi2:k,xi3:T,xl2:mt,xl3:X,xl4:nt,zmol:M,zmos:it}=o,{init:U,opsmode:V}=s,{ep:rt,inclp:gt,nodep:b,argpp:tt,mp:F}=s,l,a,ot,G,zt,S,Mt,st,et,R,j,ct,I,q,A,O,y,W,J,Y,K,xt=119459e-10,at=.01675,pt=.00015835218,lt=.0549;K=it+xt*w,U==="y"&&(K=it),Y=K+2*at*Math.sin(K),y=Math.sin(Y),R=.5*y*y-.25,j=-.5*y*Math.cos(Y);let Ot=z*R+p*j,wt=D*R+N*j,yt=$*R+L*j+Z*y,t=x*R+C*j+f*y,Ct=_*R+H*j;K=M+pt*w,U==="y"&&(K=M),Y=K+2*lt*Math.sin(K),y=Math.sin(Y),R=.5*y*y-.25,j=-.5*y*Math.cos(Y);let At=m*R+n*j,vt=k*R+T*j,Ft=mt*R+X*j+nt*y,kt=i*R+g*j+E*y,ft=P*R+Q*j;return ct=Ot+At,A=wt+vt,O=yt+Ft,I=t+kt,q=Ct+ft,U==="n"&&(ct-=e,A-=u,O-=c,I-=d,q-=h,gt+=A,rt+=ct,G=Math.sin(gt),ot=Math.cos(gt),gt>=.2?(q/=G,I-=ot*q,tt+=I,b+=q,F+=O):(S=Math.sin(b),zt=Math.cos(b),l=G*S,a=G*zt,Mt=q*zt+A*ot*S,st=-q*S+A*ot*zt,l+=Mt,a+=st,b%=v,b<0&&V==="a"&&(b+=v),W=F+tt+ot*b,et=O+I-A*b*G,W+=et,J=b,b=Math.atan2(l,a),b<0&&V==="a"&&(b+=v),Math.abs(J-b)>qt&&(b<J?b+=v:b-=v),F+=O,tt=W-F-ot*b)),{ep:rt,inclp:gt,nodep:b,argpp:tt,mp:F}}function Yo(o){let{epoch:s,ep:n,argpp:m,tc:e,inclp:d,nodep:h,np:u}=o,c,z,p,x,C,f,_,H,D,N,$,L,Z,w,i,g,E,P,Q,k,T,mt,X,nt,M,it,U,V,rt,gt,b,tt,F,l,a,ot,G,zt,S,Mt,st,et,R,j,ct,I,q,A,O,y,W,J,Y,K,xt,at,pt,lt,Ot,wt,yt,t,Ct,At=.01675,vt=.0549,Ft=29864797e-13,kt=47968065e-14,ft=.39785416,Qt=.91744867,bt=.1945905,Et=-.98088458,Wt=u,ht=n,Nt=Math.sin(h),Ht=Math.cos(h),Ut=Math.sin(m),Lt=Math.cos(m),Zt=Math.sin(d),Rt=Math.cos(d),r=ht*ht,_t=1-r,It=Math.sqrt(_t),to=0,B=0,io=0,po=0,ao=0,Xt=s+18261.5+e/1440,St=(4.523602-.00092422029*Xt)%v,ut=Math.sin(St),$t=Math.cos(St),lo=.91375164-.03568096*$t,mo=Math.sqrt(1-lo*lo),Dt=.089683511*ut/mo,Pt=Math.sqrt(1-Dt*Dt),dt=5.8351514+.001944368*Xt,oo=.39785416*ut/mo,To=Pt*$t+.91744867*Dt*ut;oo=Math.atan2(oo,To),oo+=dt-St;let qo=Math.cos(oo),Oo=Math.sin(oo);k=bt,T=Et,nt=Qt,M=ft,mt=Ht,X=Nt,$=Ft;let wo=1/Wt,ho=0;for(;ho<2;)ho+=1,c=k*mt+T*nt*X,p=-T*mt+k*nt*X,_=-k*X+T*nt*mt,H=T*M,D=T*X+k*nt*mt,N=k*M,z=Rt*_+Zt*H,x=Rt*D+Zt*N,C=-Zt*_+Rt*H,f=-Zt*D+Rt*N,L=c*Lt+z*Ut,Z=p*Lt+x*Ut,w=-c*Ut+z*Lt,i=-p*Ut+x*Lt,g=C*Ut,E=f*Ut,P=C*Lt,Q=f*Lt,yt=12*L*L-3*w*w,t=24*L*Z-6*w*i,Ct=12*Z*Z-3*i*i,J=3*(c*c+z*z)+yt*r,Y=6*(c*p+z*x)+t*r,K=3*(p*p+x*x)+Ct*r,xt=-6*c*C+r*(-24*L*P-6*w*g),at=-6*(c*f+p*C)+r*(-24*(Z*P+L*Q)+-6*(w*E+i*g)),pt=-6*p*f+r*(-24*Z*Q-6*i*E),lt=6*z*C+r*(24*L*g-6*w*P),Ot=6*(x*C+z*f)+r*(24*(Z*g+L*E)-6*(i*P+w*Q)),wt=6*x*f+r*(24*Z*E-6*i*Q),J=J+J+_t*yt,Y=Y+Y+_t*t,K=K+K+_t*Ct,q=$*wo,I=-.5*q/It,A=q*It,ct=-15*ht*A,O=L*w+Z*i,y=Z*w+L*i,W=Z*i-L*w,ho===1&&(it=ct,U=I,V=q,rt=A,gt=O,b=y,tt=W,F=J,l=Y,a=K,ot=xt,G=at,zt=pt,S=lt,Mt=Ot,st=wt,et=yt,R=t,j=Ct,k=qo,T=Oo,nt=lo,M=mo,mt=Pt*Ht+Dt*Nt,X=Nt*Pt-Ht*Dt,$=kt);let xo=(4.7199672+(.2299715*Xt-dt))%v,Co=(6.2565837+.017201977*Xt)%v,Eo=2*it*b,so=2*it*tt,eo=2*U*G,Ro=2*U*(zt-ot),Do=-2*V*l,Po=-2*V*(a-F),Ao=-2*V*(-21-9*r)*At,ro=2*rt*R,vo=2*rt*(j-et),Lo=-18*rt*At,fo=-2*U*Mt,zo=-2*U*(st-S),uo=2*ct*y,ko=2*ct*W,Uo=2*I*at,ns=2*I*(pt-xt),cs=-2*q*Y,is=-2*q*(K-J),ls=-2*q*(-21-9*r)*vt,ds=2*A*t,ms=2*A*(Ct-yt),rs=-18*A*vt,ps=-2*I*Ot,as=-2*I*(wt-lt);return{snodm:Nt,cnodm:Ht,sinim:Zt,cosim:Rt,sinomm:Ut,cosomm:Lt,day:Xt,e3:ko,ee2:uo,em:ht,emsq:r,gam:dt,peo:to,pgho:po,pho:ao,pinco:B,plo:io,rtemsq:It,se2:Eo,se3:so,sgh2:ro,sgh3:vo,sgh4:Lo,sh2:fo,sh3:zo,si2:eo,si3:Ro,sl2:Do,sl3:Po,sl4:Ao,s1:ct,s2:I,s3:q,s4:A,s5:O,s6:y,s7:W,ss1:it,ss2:U,ss3:V,ss4:rt,ss5:gt,ss6:b,ss7:tt,sz1:F,sz2:l,sz3:a,sz11:ot,sz12:G,sz13:zt,sz21:S,sz22:Mt,sz23:st,sz31:et,sz32:R,sz33:j,xgh2:ds,xgh3:ms,xgh4:rs,xh2:ps,xh3:as,xi2:Uo,xi3:ns,xl2:cs,xl3:is,xl4:ls,nm:Wt,z1:J,z2:Y,z3:K,z11:xt,z12:at,z13:pt,z21:lt,z22:Ot,z23:wt,z31:yt,z32:t,z33:Ct,zmol:xo,zmos:Co}}function Ho(o){let{cosim:s,argpo:n,s1:m,s2:e,s3:d,s4:h,s5:u,sinim:c,ss1:z,ss2:p,ss3:x,ss4:C,ss5:f,sz1:_,sz3:H,sz11:D,sz13:N,sz21:$,sz23:L,sz31:Z,sz33:w,t:i,tc:g,gsto:E,mo:P,mdot:Q,no:k,nodeo:T,nodedot:mt,xpidot:X,z1:nt,z3:M,z11:it,z13:U,z21:V,z23:rt,z31:gt,z33:b,ecco:tt,eccsq:F}=o,{emsq:l,em:a,argpm:ot,inclm:G,mm:zt,nm:S,nodem:Mt,irez:st,atime:et,d2201:R,d2211:j,d3210:ct,d3222:I,d4410:q,d4422:A,d5220:O,d5232:y,d5421:W,d5433:J,dedt:Y,didt:K,dmdt:xt,dnodt:at,domdt:pt,del1:lt,del2:Ot,del3:wt,xfact:yt,xlamo:t,xli:Ct,xni:At}=o,vt,Ft,kt,ft,Qt,bt,Et,Wt,ht,Nt,Ht,Ut,Lt,Zt,Rt,r,_t,It,to,B,io,po,ao,Xt,St,ut,$t,lo,mo,Dt,Pt,dt,oo=17891679e-13,To=21460748e-13,qo=22123015e-14,Oo=17891679e-13,wo=73636953e-16,ho=21765803e-16,xo=.0043752690880113,Co=37393792e-14,Eo=11428639e-14,so=.00015835218,eo=119459e-10;st=0,S<.0052359877&&S>.0034906585&&(st=1),S>=.00826&&S<=.00924&&a>=.5&&(st=2);let Ro=z*eo*f,Do=p*eo*(D+N),Po=-eo*x*(_+H-14-6*l),Ao=C*eo*(Z+w-6),ro=-eo*p*($+L);(G<.052359877||G>qt-.052359877)&&(ro=0),c!==0&&(ro/=c);let vo=Ao-s*ro;Y=Ro+m*so*u,K=Do+e*so*(it+U),xt=Po-so*d*(nt+M-14-6*l);let Lo=h*so*(gt+b-6),fo=-so*e*(V+rt);(G<.052359877||G>qt-.052359877)&&(fo=0),pt=vo+Lo,at=ro,c!==0&&(pt-=s/c*fo,at+=fo/c);let zo=0,uo=(E+g*xo)%v;if(a+=Y*i,G+=K*i,ot+=pt*i,Mt+=at*i,zt+=xt*i,st!==0){if(Dt=(S/Bt)**Kt,st===2){Pt=s*s;let ko=a;a=tt;let Uo=l;l=F,dt=a*l,Zt=-.306-(a-.64)*.44,a<=.65?(Rt=3.616-13.247*a+16.29*l,_t=-19.302+117.39*a-228.419*l+156.591*dt,It=-18.9068+109.7927*a-214.6334*l+146.5816*dt,to=-41.122+242.694*a-471.094*l+313.953*dt,B=-146.407+841.88*a-1629.014*l+1083.435*dt,io=-532.114+3017.977*a-5740.032*l+3708.276*dt):(Rt=-72.099+331.819*a-508.738*l+266.724*dt,_t=-346.844+1582.851*a-2415.925*l+1246.113*dt,It=-342.585+1554.908*a-2366.899*l+1215.972*dt,to=-1052.797+4758.686*a-7193.992*l+3651.957*dt,B=-3581.69+16178.11*a-24462.77*l+12422.52*dt,a>.715?io=-5149.66+29936.92*a-54087.36*l+31324.56*dt:io=1464.74-4664.75*a+3763.64*l),a<.7?(Xt=-919.2277+4988.61*a-9064.77*l+5542.21*dt,po=-822.71072+4568.6173*a-8491.4146*l+5337.524*dt,ao=-853.666+4690.25*a-8624.77*l+5341.4*dt):(Xt=-37995.78+161616.52*a-229838.2*l+109377.94*dt,po=-51752.104+218913.95*a-309468.16*l+146349.42*dt,ao=-40023.88+170470.89*a-242699.48*l+115605.82*dt),St=c*c,vt=.75*(1+2*s+Pt),Ft=1.5*St,ft=1.875*c*(1-2*s-3*Pt),Qt=-1.875*c*(1+2*s-3*Pt),Et=35*St*vt,Wt=39.375*St*St,ht=9.84375*c*(St*(1-2*s-5*Pt)+.33333333*(-2+4*s+6*Pt)),Nt=c*(4.92187512*St*(-2-4*s+10*Pt)+6.56250012*(1+2*s-3*Pt)),Ht=29.53125*c*(2-8*s+Pt*(-12+8*s+10*Pt)),Ut=29.53125*c*(-2-8*s+Pt*(12+8*s-10*Pt)),lo=S*S,mo=Dt*Dt,$t=3*lo*mo,ut=$t*Oo,R=ut*vt*Zt,j=ut*Ft*Rt,$t*=Dt,ut=$t*Co,ct=ut*ft*_t,I=ut*Qt*It,$t*=Dt,ut=2*$t*wo,q=ut*Et*to,A=ut*Wt*B,$t*=Dt,ut=$t*Eo,O=ut*ht*io,y=ut*Nt*ao,ut=2*$t*ho,W=ut*Ht*po,J=ut*Ut*Xt,t=(P+T+T-(uo+uo))%v,yt=Q+xt+2*(mt+at-xo)-k,a=ko,l=Uo}st===1&&(Lt=1+l*(-2.5+.8125*l),_t=1+2*l,r=1+l*(-6+6.60937*l),vt=.75*(1+s)*(1+s),kt=.9375*c*c*(1+3*s)-.75*(1+s),bt=1+s,bt=1.875*bt*bt*bt,lt=3*S*S*Dt*Dt,Ot=2*lt*vt*Lt*oo,wt=3*lt*bt*r*qo*Dt,lt=lt*kt*_t*To*Dt,t=(P+T+n-uo)%v,yt=Q+X+xt+pt+at-(k+xo)),Ct=t,At=k,et=0,S=k+zo}return{em:a,argpm:ot,inclm:G,mm:zt,nm:S,nodem:Mt,irez:st,atime:et,d2201:R,d2211:j,d3210:ct,d3222:I,d4410:q,d4422:A,d5220:O,d5232:y,d5421:W,d5433:J,dedt:Y,didt:K,dmdt:xt,dndt:zo,dnodt:at,domdt:pt,del1:lt,del2:Ot,del3:wt,xfact:yt,xlamo:t,xli:Ct,xni:At}}function Zo(o){let s=(o-2451545)/36525,n=-62e-7*s*s*s+.093104*s*s+(876600*3600+8640184812866e-6)*s+67310.54841;return n=n*jt/240%v,n<0&&(n+=v),n}function go(o,s,n,m,e,d,h){return o instanceof Date?Zo(Gt(o)):Zo(s!==void 0?Gt(o,s,n,m,e,d,h):o)}function Vo(o){let{ecco:s,epoch:n,inclo:m,opsmode:e}=o,{no:d}=o,h=s*s,u=1-h,c=Math.sqrt(u),z=Math.cos(m),p=z*z,x=(Bt/d)**Kt,C=.75*Vt*(3*p-1)/(c*u),f=C/(x*x),_=x*(1-f*f-f*(1/3+134*f*f/81));f=C/(_*_),d/=1+f;let H=(Bt/d)**Kt,D=Math.sin(m),N=H*u,$=1-5*p,L=-$-p-p,Z=1/H,w=N*N,i=H*(1-s),g="n",E;if(e==="a"){let P=n-7305,Q=Math.floor(P+1e-8),k=P-Q,T=.017202791694070362,mt=1.7321343856509375,X=5075514194322695e-30,nt=T+v;E=(mt+T*Q+nt*k+P*P*X)%v,E<0&&(E+=v)}else E=go(n+24332815e-1);return{no:d,method:g,ainv:Z,ao:H,con41:L,con42:$,cosio:z,cosio2:p,eccsq:h,omeosq:u,posq:w,rp:i,rteosq:c,sinio:D,gsto:E}}function Go(o){let{irez:s,d2201:n,d2211:m,d3210:e,d3222:d,d4410:h,d4422:u,d5220:c,d5232:z,d5421:p,d5433:x,dedt:C,del1:f,del2:_,del3:H,didt:D,dmdt:N,dnodt:$,domdt:L,argpo:Z,argpdot:w,t:i,tc:g,gsto:E,xfact:P,xlamo:Q,no:k}=o,{atime:T,em:mt,argpm:X,inclm:nt,xli:M,mm:it,xni:U,nodem:V,nm:rt}=o,gt=.13130908,b=2.8843198,tt=.37448087,F=5.7686396,l=.95240898,a=1.8014998,ot=1.050833,G=4.4108898,zt=.0043752690880113,S=720,Mt=-720,st=259200,et,R,j,ct,I,q,A,O,y=0,W=0,J=(E+g*zt)%v;if(mt+=C*i,nt+=D*i,X+=L*i,V+=$*i,it+=N*i,s!==0){(T===0||i*T<=0||Math.abs(i)<Math.abs(T))&&(T=0,U=k,M=Q),i>0?et=S:et=Mt;let Y=381;for(;Y===381;)s!==2?(A=f*Math.sin(M-gt)+_*Math.sin(2*(M-b))+H*Math.sin(3*(M-tt)),I=U+P,q=f*Math.cos(M-gt)+2*_*Math.cos(2*(M-b))+3*H*Math.cos(3*(M-tt)),q*=I):(O=Z+w*T,j=O+O,R=M+M,A=n*Math.sin(j+M-F)+m*Math.sin(M-F)+e*Math.sin(O+M-l)+d*Math.sin(-O+M-l)+h*Math.sin(j+R-a)+u*Math.sin(R-a)+c*Math.sin(O+M-ot)+z*Math.sin(-O+M-ot)+p*Math.sin(O+R-G)+x*Math.sin(-O+R-G),I=U+P,q=n*Math.cos(j+M-F)+m*Math.cos(M-F)+e*Math.cos(O+M-l)+d*Math.cos(-O+M-l)+c*Math.cos(O+M-ot)+z*Math.cos(-O+M-ot)+2*(h*Math.cos(j+R-a)+u*Math.cos(R-a)+p*Math.cos(O+R-G)+x*Math.cos(-O+R-G)),q*=I),Math.abs(i-T)>=S?Y=381:(W=i-T,Y=0),Y===381&&(M+=I*et+A*st,U+=A*et+q*st,T+=et);rt=U+A*W+q*W*W*.5,ct=M+I*W+A*W*W*.5,s!==1?(it=ct-2*V+2*J,y=rt-k):(it=ct-V-X+J,y=rt-k),rt=k+y}return{atime:T,em:mt,argpm:X,inclm:nt,xli:M,mm:it,xni:U,nodem:V,dndt:y,nm:rt}}var Yt;(function(o){o[o.None=0]="None",o[o.MeanEccentricityOutOfRange=1]="MeanEccentricityOutOfRange",o[o.MeanMotionBelowZero=2]="MeanMotionBelowZero",o[o.PerturbedEccentricityOutOfRange=3]="PerturbedEccentricityOutOfRange",o[o.SemiLatusRectumBelowZero=4]="SemiLatusRectumBelowZero",o[o.Decayed=6]="Decayed"})(Yt||(Yt={}));function co(o,s){let n,m,e,d,h,u,c,z,p,x,C,f,_,H,D,N,$,L,Z,w,i,g,E,P,Q,k,T;o.t=s,o.error=Yt.None;let X=o.mo+o.mdot*o.t,nt=o.argpo+o.argpdot*o.t,M=o.nodeo+o.nodedot*o.t;p=nt,i=X;let it=o.t*o.t;if(E=M+o.nodecf*it,$=1-o.cc1*o.t,L=o.bstar*o.cc4*o.t,Z=o.t2cof*it,o.isimp!==1){c=o.omgcof*o.t;let ht=1+o.eta*Math.cos(X);u=o.xmcof*(ht*ht*ht-o.delmo),N=c+u,i=X+N,p=nt-N,f=it*o.t,_=f*o.t,$=$-o.d2*it-o.d3*f-o.d4*_,L+=o.bstar*o.cc5*(Math.sin(i)-o.sinmao),Z=Z+o.t3cof*f+_*(o.t4cof+o.t*o.t5cof)}o.tempa=$,g=o.no;let U=o.ecco;if(w=o.inclo,o.method==="d"){H=o.t;let ht={irez:o.irez,d2201:o.d2201,d2211:o.d2211,d3210:o.d3210,d3222:o.d3222,d4410:o.d4410,d4422:o.d4422,d5220:o.d5220,d5232:o.d5232,d5421:o.d5421,d5433:o.d5433,dedt:o.dedt,del1:o.del1,del2:o.del2,del3:o.del3,didt:o.didt,dmdt:o.dmdt,dnodt:o.dnodt,domdt:o.domdt,argpo:o.argpo,argpdot:o.argpdot,t:o.t,tc:H,gsto:o.gsto,xfact:o.xfact,xlamo:o.xlamo,no:o.no,atime:o.atime,em:U,argpm:p,inclm:w,xli:o.xli,mm:i,xni:o.xni,nodem:E,nm:g},Nt=Go(ht);({em:U,argpm:p,inclm:w,mm:i,nodem:E,nm:g}=Nt),o.atime=Nt.atime,o.xli=Nt.xli,o.xni=Nt.xni}if(g<=0)return o.error=Yt.MeanMotionBelowZero,null;let V=(Bt/g)**Kt*$*$;if(g=Bt/V**1.5,U-=L,U>=1||U<-.001)return o.error=Yt.MeanEccentricityOutOfRange,null;U<1e-6&&(U=1e-6),i+=o.no*Z,Q=i+p+E,E%=v,p%=v,Q%=v,i=(Q-p-E)%v;let rt={am:V,em:U,im:w,Om:E,om:p,mm:i,nm:g},gt=Math.sin(w),b=Math.cos(w),tt=U;if(P=w,x=p,T=E,k=i,d=gt,e=b,o.method==="d"){let ht={inclo:o.inclo,init:"n",ep:tt,inclp:P,nodep:T,argpp:x,mp:k,opsmode:o.operationmode},Nt=bo(o,ht);if({ep:tt,nodep:T,argpp:x,mp:k}=Nt,P=Nt.inclp,P<0&&(P=-P,T+=qt,x-=qt),tt<0||tt>1)return o.error=Yt.PerturbedEccentricityOutOfRange,null}o.method==="d"&&(d=Math.sin(P),e=Math.cos(P),o.aycof=-.5*Jt*d,Math.abs(e+1)>15e-13?o.xlcof=-.25*Jt*d*(3+5*e)/(1+e):o.xlcof=-.25*Jt*d*(3+5*e)/15e-13);let F=tt*Math.cos(x);N=1/(V*(1-tt*tt));let l=tt*Math.sin(x)+N*o.aycof,ot=(k+x+T+N*o.xlcof*F-T)%v;z=ot,D=9999.9;let G=1;for(;Math.abs(D)>=1e-12&&G<=10;)m=Math.sin(z),n=Math.cos(z),D=1-n*F-m*l,D=(ot-l*n+F*m-z)/D,Math.abs(D)>=.95&&(D>0?D=.95:D=-.95),z+=D,G+=1;let zt=F*n+l*m,S=F*m-l*n,Mt=F*F+l*l,st=V*(1-Mt);if(st<0)return o.error=Yt.SemiLatusRectumBelowZero,null;let et=V*(1-zt),R=Math.sqrt(V)*S/et,j=Math.sqrt(st)/et,ct=Math.sqrt(1-Mt);N=S/(1+ct);let I=V/et*(m-l-F*N),q=V/et*(n-F+l*N);C=Math.atan2(I,q);let A=(q+q)*I,O=1-2*I*I;N=1/st;let y=.5*Vt*N,W=y*N;o.method==="d"&&(h=e*e,o.con41=3*h-1,o.x1mth2=1-h,o.x7thm1=7*h-1);let J=et*(1-1.5*W*ct*o.con41)+.5*y*o.x1mth2*O;if(J<1)return o.error=Yt.Decayed,null;C-=.25*W*o.x7thm1*A;let Y=T+1.5*W*e*A,K=P+1.5*W*e*d*O,xt=R-g*y*o.x1mth2*A/Bt,at=j+g*y*(o.x1mth2*O+1.5*o.con41)/Bt,pt=Math.sin(C),lt=Math.cos(C),Ot=Math.sin(Y),wt=Math.cos(Y),yt=Math.sin(K),t=Math.cos(K),Ct=-Ot*t,At=wt*t,vt=Ct*pt+wt*lt,Ft=At*pt+Ot*lt,kt=yt*pt,ft=Ct*lt-wt*pt,Qt=At*lt-Ot*pt,bt=yt*lt,Et={x:J*vt*Tt,y:J*Ft*Tt,z:J*kt*Tt},Wt={x:(xt*vt+at*ft)*Mo,y:(xt*Ft+at*Qt)*Mo,z:(xt*kt+at*bt)*Mo};return{position:Et,velocity:Wt,meanElements:rt}}function Wo(o,s){let{opsmode:n,satn:m,epoch:e,xbstar:d,xecco:h,xargpo:u,xinclo:c,xmo:z,xno:p,xnodeo:x}=s,C,f,_,H,D,N,$,L,Z,w,i,g,E,P,Q,k,T,mt,X,nt,M,it,U,V,rt,gt,b,tt,F,l,a,ot,G,zt,S,Mt,st,et,R,j,ct,I,q,A,O,y,W,J,Y,K,xt,at,pt,lt,Ot,wt,yt=15e-13,t=o;t.isimp=0,t.method="n",t.aycof=0,t.con41=0,t.cc1=0,t.cc4=0,t.cc5=0,t.d2=0,t.d3=0,t.d4=0,t.delmo=0,t.eta=0,t.argpdot=0,t.omgcof=0,t.sinmao=0,t.t=0,t.t2cof=0,t.t3cof=0,t.t4cof=0,t.t5cof=0,t.x1mth2=0,t.x7thm1=0,t.mdot=0,t.nodedot=0,t.xlcof=0,t.xmcof=0,t.nodecf=0,t.irez=0,t.d2201=0,t.d2211=0,t.d3210=0,t.d3222=0,t.d4410=0,t.d4422=0,t.d5220=0,t.d5232=0,t.d5421=0,t.d5433=0,t.dedt=0,t.del1=0,t.del2=0,t.del3=0,t.didt=0,t.dmdt=0,t.dnodt=0,t.domdt=0,t.e3=0,t.ee2=0,t.peo=0,t.pgho=0,t.pho=0,t.pinco=0,t.plo=0,t.se2=0,t.se3=0,t.sgh2=0,t.sgh3=0,t.sgh4=0,t.sh2=0,t.sh3=0,t.si2=0,t.si3=0,t.sl2=0,t.sl3=0,t.sl4=0,t.gsto=0,t.xfact=0,t.xgh2=0,t.xgh3=0,t.xgh4=0,t.xh2=0,t.xh3=0,t.xi2=0,t.xi3=0,t.xl2=0,t.xl3=0,t.xl4=0,t.xlamo=0,t.zmol=0,t.zmos=0,t.atime=0,t.xli=0,t.xni=0,t.bstar=d,t.ecco=h,t.argpo=u,t.inclo=c,t.mo=z,t.no=p,t.nokozai=p,t.nodeo=x,t.operationmode=n;let Ct=78/Tt+1,At=42/Tt,vt=At*At*At*At;t.init="y",t.t=0;let Ft={satn:m,ecco:t.ecco,epoch:e,inclo:t.inclo,no:t.no,method:t.method,opsmode:t.operationmode},kt=Vo(Ft),{ao:ft,con42:Qt,cosio:bt,cosio2:Et,eccsq:Wt,omeosq:ht,posq:Nt,rp:Ht,rteosq:Ut,sinio:Lt}=kt;if(t.no=kt.no,t.con41=kt.con41,t.gsto=kt.gsto,t.a=(t.no*jo)**(-2/3),t.alta=t.a*(1+t.ecco)-1,t.altp=t.a*(1-t.ecco)-1,t.error=0,ht>=0||t.no>=0){if(t.isimp=0,Ht<220/Tt+1&&(t.isimp=1),b=Ct,M=vt,mt=(Ht-1)*Tt,mt<156){b=mt-78,mt<98&&(b=20);let Rt=(120-b)/Tt;M=Rt*Rt*Rt*Rt,b=b/Tt+1}X=1/Nt,y=1/(ft-b),t.eta=ft*t.ecco*y,g=t.eta*t.eta,i=t.ecco*t.eta,nt=Math.abs(1-g),N=M*y**4,$=N/nt**3.5,H=$*t.no*(ft*(1+1.5*g+i*(4+g))+.375*Vt*y/nt*t.con41*(8+3*g*(8+g))),t.cc1=t.bstar*H,D=0,t.ecco>1e-4&&(D=-2*N*y*Jt*t.no*Lt/t.ecco),t.x1mth2=1-Et,t.cc4=2*t.no*$*ft*ht*(t.eta*(2+.5*g)+t.ecco*(.5+2*g)-Vt*y/(ft*nt)*(-3*t.con41*(1-2*i+g*(1.5-.5*i))+.75*t.x1mth2*(2*g-i*(1+g))*Math.cos(2*t.argpo))),t.cc5=2*$*ft*ht*(1+2.75*(g+i)+i*g),L=Et*Et,q=1.5*Vt*X*t.no,A=.5*q*Vt*X,O=-.46875*Bo*X*X*t.no,t.mdot=t.no+.5*q*Ut*t.con41+.0625*A*Ut*(13-78*Et+137*L),t.argpdot=-.5*q*Qt+.0625*A*(7-114*Et+395*L)+O*(3-36*Et+49*L),J=-q*bt,t.nodedot=J+(.5*A*(4-19*Et)+2*O*(3-7*Et))*bt,W=t.argpdot+t.nodedot,t.omgcof=t.bstar*D*Math.cos(t.argpo),t.xmcof=0,t.ecco>1e-4&&(t.xmcof=-Kt*N*t.bstar/i),t.nodecf=3.5*ht*J*t.cc1,t.t2cof=1.5*t.cc1,Math.abs(bt+1)>15e-13?t.xlcof=-.25*Jt*Lt*(3+5*bt)/(1+bt):t.xlcof=-.25*Jt*Lt*(3+5*bt)/yt,t.aycof=-.5*Jt*Lt;let Zt=1+t.eta*Math.cos(t.mo);if(t.delmo=Zt*Zt*Zt,t.sinmao=Math.sin(t.mo),t.x7thm1=7*Et-1,2*qt/t.no>=225){t.method="d",t.isimp=1,ct=0,Q=t.inclo;let Rt={epoch:e,ep:t.ecco,argpp:t.argpo,tc:ct,inclp:t.inclo,nodep:t.nodeo,np:t.no,e3:t.e3,ee2:t.ee2,peo:t.peo,pgho:t.pgho,pho:t.pho,pinco:t.pinco,plo:t.plo,se2:t.se2,se3:t.se3,sgh2:t.sgh2,sgh3:t.sgh3,sgh4:t.sgh4,sh2:t.sh2,sh3:t.sh3,si2:t.si2,si3:t.si3,sl2:t.sl2,sl3:t.sl3,sl4:t.sl4,xgh2:t.xgh2,xgh3:t.xgh3,xgh4:t.xgh4,xh2:t.xh2,xh3:t.xh3,xi2:t.xi2,xi3:t.xi3,xl2:t.xl2,xl3:t.xl3,xl4:t.xl4,zmol:t.zmol,zmos:t.zmos},r=Yo(Rt);t.e3=r.e3,t.ee2=r.ee2,t.peo=r.peo,t.pgho=r.pgho,t.pho=r.pho,t.pinco=r.pinco,t.plo=r.plo,t.se2=r.se2,t.se3=r.se3,t.sgh2=r.sgh2,t.sgh3=r.sgh3,t.sgh4=r.sgh4,t.sh2=r.sh2,t.sh3=r.sh3,t.si2=r.si2,t.si3=r.si3,t.sl2=r.sl2,t.sl3=r.sl3,t.sl4=r.sl4,{sinim:f,cosim:C,em:Z,emsq:w,s1:it,s2:U,s3:V,s4:rt,s5:gt,ss1:tt,ss2:F,ss3:l,ss4:a,ss5:ot,sz1:G,sz3:zt,sz11:S,sz13:Mt,sz21:st,sz23:et,sz31:R,sz33:j}=r,t.xgh2=r.xgh2,t.xgh3=r.xgh3,t.xgh4=r.xgh4,t.xh2=r.xh2,t.xh3=r.xh3,t.xi2=r.xi2,t.xi3=r.xi3,t.xl2=r.xl2,t.xl3=r.xl3,t.xl4=r.xl4,t.zmol=r.zmol,t.zmos=r.zmos,{nm:T,z1:Y,z3:K,z11:xt,z13:at,z21:pt,z23:lt,z31:Ot,z33:wt}=r;let _t={inclo:Q,init:t.init,ep:t.ecco,inclp:t.inclo,nodep:t.nodeo,argpp:t.argpo,mp:t.mo,opsmode:t.operationmode},It=bo(t,_t);t.ecco=It.ep,t.inclo=It.inclp,t.nodeo=It.nodep,t.argpo=It.argpp,t.mo=It.mp,E=0,P=0,k=0;let to={cosim:C,emsq:w,argpo:t.argpo,s1:it,s2:U,s3:V,s4:rt,s5:gt,sinim:f,ss1:tt,ss2:F,ss3:l,ss4:a,ss5:ot,sz1:G,sz3:zt,sz11:S,sz13:Mt,sz21:st,sz23:et,sz31:R,sz33:j,t:t.t,tc:ct,gsto:t.gsto,mo:t.mo,mdot:t.mdot,no:t.no,nodeo:t.nodeo,nodedot:t.nodedot,xpidot:W,z1:Y,z3:K,z11:xt,z13:at,z21:pt,z23:lt,z31:Ot,z33:wt,ecco:t.ecco,eccsq:Wt,em:Z,argpm:E,inclm:Q,mm:k,nm:T,nodem:P,irez:t.irez,atime:t.atime,d2201:t.d2201,d2211:t.d2211,d3210:t.d3210,d3222:t.d3222,d4410:t.d4410,d4422:t.d4422,d5220:t.d5220,d5232:t.d5232,d5421:t.d5421,d5433:t.d5433,dedt:t.dedt,didt:t.didt,dmdt:t.dmdt,dnodt:t.dnodt,domdt:t.domdt,del1:t.del1,del2:t.del2,del3:t.del3,xfact:t.xfact,xlamo:t.xlamo,xli:t.xli,xni:t.xni},B=Ho(to);t.irez=B.irez,t.atime=B.atime,t.d2201=B.d2201,t.d2211=B.d2211,t.d3210=B.d3210,t.d3222=B.d3222,t.d4410=B.d4410,t.d4422=B.d4422,t.d5220=B.d5220,t.d5232=B.d5232,t.d5421=B.d5421,t.d5433=B.d5433,t.dedt=B.dedt,t.didt=B.didt,t.dmdt=B.dmdt,t.dnodt=B.dnodt,t.domdt=B.domdt,t.del1=B.del1,t.del2=B.del2,t.del3=B.del3,t.xfact=B.xfact,t.xlamo=B.xlamo,t.xli=B.xli,t.xni=B.xni}t.isimp!==1&&(_=t.cc1*t.cc1,t.d2=4*ft*y*_,I=t.d2*y*t.cc1/3,t.d3=(17*ft+b)*I,t.d4=.5*I*ft*y*(221*ft+31*b)*t.cc1,t.t3cof=t.d2+2*_,t.t4cof=.25*(3*t.d3+t.cc1*(12*t.d2+10*_)),t.t5cof=.2*(3*t.d4+12*t.cc1*t.d3+6*t.d2*t.d2+15*_*(2*t.d2+_)))}co(t,0),t.init="n"}function Xo(o,s){Wo(o,{opsmode:s,satn:o.satnum,epoch:o.jdsatepoch-24332815e-1,xbstar:o.bstar,xecco:o.ecco,xargpo:o.argpo,xinclo:o.inclo,xmo:o.mo,xno:o.no,xnodeo:o.nodeo})}function Jo(o,s){let e=o.substring(2,7),d=Number(o.substring(18,20)),h=Number(o.substring(20,32)),u=Number(o.substring(33,43)),c=+`${o.substring(44,45)}.${o.substring(45,50)}E${o.substring(50,52)}`,z=+`${o.substring(53,54)}.${o.substring(54,59)}E${o.substring(59,61)}`,p=Number(s.substring(8,16))*jt,x=Number(s.substring(17,25))*jt,C=+`.${s.substring(26,33).replace(/\s/g,"0")}`,f=Number(s.substring(34,42))*jt,_=Number(s.substring(43,51))*jt,H=Number(s.substring(52,63))/no;u/=no*1440,c/=no*1440*1440;let D=d<57?d+2e3:d+1900,N=yo(D,h),{mon:$,day:L,hr:Z,minute:w,sec:i}=N,g=Gt(D,$,L,Z,w,i),E={error:0,satnum:e,epochyr:d,epochdays:h,ndot:u,nddot:c,bstar:z,inclo:p,nodeo:x,ecco:C,argpo:f,mo:_,no:H,jdsatepoch:g};return Xo(E,"i"),E}function Ko(o,s="i"){let m=o.NORAD_CAT_ID.toString(),e=o.EPOCH.endsWith("Z")?o.EPOCH:`${o.EPOCH}Z`,d=new Date(e),h=/\.(\d+)Z$/.exec(e)?.[1]??"",u=h.length>3?+`0.${h.slice(3)}`/1e3:0,c=d.getUTCFullYear(),z=Number(c.toString().slice(-2)),p=(d.valueOf()-new Date(Date.UTC(c,0,1,0,0,0)).valueOf())/(86400*1e3)+u/86400+1,x=Number(o.MEAN_MOTION_DOT),C=Number(o.MEAN_MOTION_DDOT);x/=no*1440,C/=no*1440*1440;let f=Number(o.BSTAR),_=Number(o.INCLINATION)*jt,H=Number(o.RA_OF_ASC_NODE)*jt,D=Number(o.ECCENTRICITY),N=Number(o.ARG_OF_PERICENTER)*jt,$=Number(o.MEAN_ANOMALY)*jt,L=Number(o.MEAN_MOTION)/no,Z=yo(c,p),{mon:w,day:i,hr:g,minute:E,sec:P}=Z,Q=Gt(c,w,i,g,E,P),k={error:0,satnum:m,epochyr:z,epochdays:p,ndot:x,nddot:C,bstar:f,inclo:_,nodeo:H,ecco:D,argpo:N,mo:$,no:L,jdsatepoch:Q};return Xo(k,s),k}var Qo=o=>o.tempa<=0;function _o(o,...s){let n=s.at(-1),m=typeof n=="object"&&!(n instanceof Date)?n:void 0,e=m?s.slice(0,-1):s,h=(Gt(...e)-o.jdsatepoch)*$o,u=co(o,h);return m?.communityDecayCheckEnabled&&u&&Qo(o)?(o.error=Yt.Decayed,null):u}var ts=7292115e-11;function os({longitude:o,latitude:s,height:n}){let d=(6378.137-6356.7523142)/6378.137,h=2*d-d*d,u=6378.137/Math.sqrt(1-h*(Math.sin(s)*Math.sin(s))),c=(u+n)*Math.cos(s)*Math.cos(o),z=(u+n)*Math.cos(s)*Math.sin(o),p=(u*(1-h)+n)*Math.sin(s);return{x:c,y:z,z:p}}function ss(o,s){let m=6356.7523142,e=Math.sqrt(o.x*o.x+o.y*o.y),d=(6378.137-m)/6378.137,h=2*d-d*d,u=((Math.atan2(o.y,o.x)-s+qt)%v+v)%v-qt,c=20,z=1e-12,p=0,x=Math.atan2(o.z,e),C;do{C=x;let N=Math.sin(x),$=1/Math.sqrt(1-h*(N*N));x=Math.atan2(o.z+6378.137*$*h*N,e)}while(Math.abs(x-C)>z&&++p<c);let f=Math.sin(x),_=Math.cos(x),H=1/Math.sqrt(1-h*(f*f)),D=e*_+o.z*f-6378.137/H;return{longitude:u,latitude:x,height:D}}function No(o,s){let n=o.x*Math.cos(s)+o.y*Math.sin(s),m=o.x*-Math.sin(s)+o.y*Math.cos(s),{z:e}=o;return{x:n,y:m,z:e}}function es(o,s,n){let m=No(o,n),e=No(s,n);return{x:e.x+ts*m.y,y:e.y-ts*m.x,z:e.z}}return zs(Ns);})();
+
+  </script>
+  <script>
+
+(function () {
+  "use strict";
+
+  const CACHE_KEY = "sat-tracker-cache-v1";
+  const CACHE_MS = 2 * 60 * 60 * 1000;
+  const GP_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=csv";
+  const EARTH_R = (typeof satellite !== "undefined" && satellite.earthRadius) || 6378.135;
+  const ISS_ID = 25544;
+
+  const GROUPS = [
+    { id: "starlink", label: "Starlink", color: "#7eb8ff" },
+    { id: "oneweb", label: "OneWeb", color: "#c792ea" },
+    { id: "gnss", label: "GPS / GNSS", color: "#ffd166" },
+    { id: "stations", label: "Stations", color: "#ff4d6d" },
+    { id: "weather", label: "Weather", color: "#80ffdb" },
+    { id: "commgeo", label: "Communications / GEO", color: "#f4a261" },
+    { id: "science", label: "Science / Earth obs.", color: "#95d5b2" },
+    { id: "other", label: "Other", color: "#8d99ae" }
+  ];
+  const GROUP_INDEX = Object.fromEntries(GROUPS.map((g, i) => [g.id, i]));
+
+  const RE_STARLINK = /STARLINK/;
+  const RE_ONEWEB = /ONEWEB/;
+  const RE_STATIONS = /\bISS\b|ZARYA|NAUKA|POISK|RASSVET|ZVEZDA|ZARYA|TIANHE|WENTIAN|MENGTIAN|TIANZHOU|\bCSS\b|TIANGONG/;
+  const RE_GNSS = /NAVSTAR|\bGPS\b|GLONASS|GALILEO|BEIDOU|\bQZS[S-]|\bQZS-|\bIRNSS\b|\bNAVIC\b/;
+  const RE_WEATHER = /NOAA|GOES|METEOSAT|METOP|HIMAWARI|FENGYUN|\bFY[- ]|METEOR[- ]|DMSP|\bNPP\b|JPSS|GCOM|EWS-G|GMS-|ELEKTRO|ELECTRO-L|S-NPP|SUOMI/;
+  const RE_SCIENCE = /LANDSAT|SENTINEL|AQUA|TERRA|AURA|HUBBLE|SWIFT|CHANDRA|PLEIADES|\bSPOT\b|WORLDVIEW|GEOEYE|ICEYE|CAPELLA|RADARSAT|ALOS|NISAR|SWOT|\bPACE\b|TEMPO|\bOCO[- ]|GOSAT|SMAP|ICESAT|CRYOSAT|ENVISAT|\bERS-|JASON|SKYSAT|NUSAT|COSMO-SKYMED|TERRASAR|\bPAZ\b|\bRCM-|AMAZONIA|CBERS|GAOFEN|JILIN|SUPERVIEW|KANOPUS|RESURS|CLOUDAT|CALIPSO|GRACE|SWARM|ICON|TIMED|AIM |SORCE|TERRA-SAR|TANDEM-X|TERRASAR-X|SMOS|SMAP|COSMO-|PRISMA|ASNARO|ASNARO|HISUI|GUKESAT|PLANET |FLOCK|DOVE|SKYSAT|BLACKSKY|UHF/;
+  const RE_COMM = /INTELSAT|EUTELSAT|\bSES[- ]|TDRS|DIRECTV|ASTRA|HOTBIRD|IRIDIUM|GLOBALSTAR|ORBCOMM|INMARSAT|VIASAT|VIA SAT|\bO3B\b|TELESAT|ECHOSTAR|\bGALAXY\b|SATMEX|\bANIK\b|NIMIQ|JCSAT|TURKSAT|YAMAL|EXPRESS-|AMOS-|NILESAT|ARABSAT|\bTHOR\b|SIRIUS|\bXM[- ]|ASTROCAST|STARONE|AMAZONIA|SKYNET|SICRAL|WGS |MUOS|MILSTAR|AEHF|USA |G-SAT|GSAT-|INSAT|CHINASAT|ASIASAT|MEASAT|THAICOM|OPTUS|YAMAL|KA-SAT|HELLAS-SAT|RASCOM|BELINTERSAT|AZERSPACE|ES'HAIL|ESHAIL|BADR |ARABSAT|YAH SAT|YAHSAT|SPACEWAY|HORIZONS|JUPITER |VIASAT|EUTELSAT|INTELSAT/;
+
+  function classify(name, meanMotion) {
+    const n = String(name || "").toUpperCase();
+    if (RE_STARLINK.test(n)) return "starlink";
+    if (RE_ONEWEB.test(n)) return "oneweb";
+    if (RE_STATIONS.test(n)) return "stations";
+    if (RE_GNSS.test(n)) return "gnss";
+    if (RE_WEATHER.test(n)) return "weather";
+    if (RE_SCIENCE.test(n)) return "science";
+    const mm = Number(meanMotion);
+    if (mm > 0.9 && mm < 1.15) return "commgeo";
+    if (RE_COMM.test(n)) return "commgeo";
+    return "other";
+  }
+
+  function parseCsv(text) {
+    const lines = String(text).replace(/^\uFEFF/, "").split(/\r?\n/).filter((l) => l.trim());
+    if (!lines.length) return [];
+    const headers = splitCsvLine(lines[0]);
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = splitCsvLine(lines[i]);
+      if (cols.length < headers.length) continue;
+      const row = {};
+      for (let h = 0; h < headers.length; h++) row[headers[h]] = cols[h];
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  function splitCsvLine(line) {
+    const out = [];
+    let cur = "", q = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (q) {
+        if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+        else if (c === '"') q = false;
+        else cur += c;
+      } else if (c === '"') q = true;
+      else if (c === ",") { out.push(cur); cur = ""; }
+      else cur += c;
+    }
+    out.push(cur);
+    return out;
+  }
+
+  function rowToOmm(row) {
+    const id = Number(row.NORAD_CAT_ID);
+    if (!Number.isFinite(id)) return null;
+    const mm = Number(row.MEAN_MOTION);
+    if (!Number.isFinite(mm) || mm <= 0) return null;
+    return {
+      OBJECT_NAME: row.OBJECT_NAME || "UNKNOWN",
+      OBJECT_ID: row.OBJECT_ID || "",
+      EPOCH: row.EPOCH,
+      MEAN_MOTION: mm,
+      ECCENTRICITY: Number(row.ECCENTRICITY),
+      INCLINATION: Number(row.INCLINATION),
+      RA_OF_ASC_NODE: Number(row.RA_OF_ASC_NODE),
+      ARG_OF_PERICENTER: Number(row.ARG_OF_PERICENTER),
+      MEAN_ANOMALY: Number(row.MEAN_ANOMALY),
+      BSTAR: Number(row.BSTAR),
+      MEAN_MOTION_DOT: Number(row.MEAN_MOTION_DOT),
+      MEAN_MOTION_DDOT: Number(row.MEAN_MOTION_DDOT),
+      NORAD_CAT_ID: id
+    };
+  }
+
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d", { alpha: false });
+  const $status = document.getElementById("status");
+  const $filters = document.getElementById("filters");
+  const $card = document.getElementById("card");
+  const $toast = document.getElementById("toast");
+  const $loader = document.getElementById("loader");
+  const $loaderText = document.getElementById("loaderText");
+  const $simClock = document.getElementById("simClock");
+  const $speed = document.getElementById("speed");
+  const $speedVal = document.getElementById("speedVal");
+  const $refresh = document.getElementById("refreshBtn");
+  const $now = document.getElementById("nowBtn");
+  const $toggle = document.getElementById("togglePanel");
+  const $panel = document.getElementById("panel");
+
+  const enabled = Object.fromEntries(GROUPS.map((g) => [g.id, true]));
+  const counts = Object.fromEntries(GROUPS.map((g) => [g.id, 0]));
+
+  let metas = [];
+  let fetchedAt = 0;
+  let worker = null;
+  let workerReady = false;
+  let useMainThread = false;
+  let satrecs = null;
+  let propBusy = false;
+
+  let sampleTime = 0;
+  let pos = new Float32Array(0);
+  let vel = new Float32Array(0);
+  let alt = new Float32Array(0);
+  let ok = new Uint8Array(0);
+
+  let simTime = Date.now();
+  let lastWall = performance.now();
+  let speed = 1;
+  let live = true;
+
+  let yaw = 2.4;
+  let pitch = 0.35;
+  let viewRadius = 48000;
+  let dpr = 1;
+  let width = 0, height = 0, cx = 0, cy = 0, scale = 1;
+
+  let camX = 1, camY = 0, camZ = 0;
+  let rx = 0, ry = 1, rz = 0;
+  let ux = 0, uy = 0, uz = 1;
+
+  let dragging = false, dragMoved = false;
+  let lastPx = 0, lastPy = 0, lastPid = null;
+  let pointers = new Map();
+  let pinchStartDist = 0, pinchStartRadius = 0;
+  let selected = -1;
+  let toastTimer = 0;
+  let lastFrameDrawnWithData = false;
+
+  function setStatus(html, isError) {
+    $status.className = "status" + (isError ? " error" : "");
+    $status.innerHTML = html;
+  }
+
+  function toast(msg, ms) {
+    $toast.textContent = msg;
+    $toast.classList.add("visible");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => $toast.classList.remove("visible"), ms || 4500);
+  }
+
+  function formatPT(ms) {
+    try {
+      return new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/Los_Angeles",
+        year: "numeric", month: "short", day: "numeric",
+        hour: "numeric", minute: "2-digit", second: "2-digit",
+        timeZoneName: "short"
+      }).format(new Date(ms));
+    } catch {
+      return new Date(ms).toISOString();
+    }
+  }
+
+  function formatUTC(ms) {
+    const d = new Date(ms);
+    return d.toISOString().replace("T", " ").replace("Z", " UTC");
+  }
+
+  function speedFromSlider(v) {
+    // 0..1000 maps 1x to 3600x logarithmically
+    const t = Number(v) / 1000;
+    const s = Math.pow(3600, t);
+    return s < 1.02 ? 1 : s;
+  }
+
+  function formatSpeed(s) {
+    if (s <= 1.01) return "1×";
+    if (s < 10) return s.toFixed(1) + "×";
+    if (s < 100) return s.toFixed(0) + "×";
+    return Math.round(s) + "×";
+  }
+
+
+  function expandCompact(rows) {
+    return rows.map((r) => ({
+      OBJECT_NAME: r[0], OBJECT_ID: r[1], EPOCH: r[2], MEAN_MOTION: r[3],
+      ECCENTRICITY: r[4], INCLINATION: r[5], RA_OF_ASC_NODE: r[6],
+      ARG_OF_PERICENTER: r[7], MEAN_ANOMALY: r[8], BSTAR: r[9],
+      MEAN_MOTION_DOT: r[10], MEAN_MOTION_DDOT: r[11], NORAD_CAT_ID: r[12]
+    }));
+  }
+
+  function idbOpen() {
+    return new Promise((resolve, reject) => {
+      if (!window.indexedDB) { reject(new Error("no idb")); return; }
+      const req = indexedDB.open("sat-tracker", 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains("cache")) db.createObjectStore("cache");
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error("idb open failed"));
+    });
+  }
+
+  async function readCache() {
+    try {
+      const db = await idbOpen();
+      const value = await new Promise((resolve, reject) => {
+        const tx = db.transaction("cache", "readonly");
+        const req = tx.objectStore("cache").get(CACHE_KEY);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+      });
+      db.close();
+      if (value && Array.isArray(value.records) && value.fetchedAt) return value;
+      if (value && Array.isArray(value.compact) && value.fetchedAt) return { fetchedAt: value.fetchedAt, records: expandCompact(value.compact), source: value.source };
+    } catch (err) {
+      console.warn("IndexedDB read failed, trying localStorage", err);
+    }
+    try {
+      const raw = localStorage.getItem(CACHE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.records) && parsed.fetchedAt) return parsed;
+      if (parsed && Array.isArray(parsed.compact) && parsed.fetchedAt) {
+        return { fetchedAt: parsed.fetchedAt, records: expandCompact(parsed.compact), source: parsed.source };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function writeCache(records, at) {
+    const payload = { records, fetchedAt: at, source: GP_URL };
+    try {
+      const db = await idbOpen();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction("cache", "readwrite");
+        tx.objectStore("cache").put(payload, CACHE_KEY);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+      return true;
+    } catch (err) {
+      console.warn("IndexedDB cache failed", err);
+    }
+    try {
+      // Compact fallback; full JSON often exceeds the ~5 MB localStorage quota.
+      const compact = records.map((r) => [
+        r.OBJECT_NAME, r.OBJECT_ID, r.EPOCH, r.MEAN_MOTION, r.ECCENTRICITY,
+        r.INCLINATION, r.RA_OF_ASC_NODE, r.ARG_OF_PERICENTER, r.MEAN_ANOMALY,
+        r.BSTAR, r.MEAN_MOTION_DOT, r.MEAN_MOTION_DDOT, r.NORAD_CAT_ID
+      ]);
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ compact, fetchedAt: at, source: GP_URL }));
+      return true;
+    } catch (err) {
+      console.warn("localStorage cache failed", err);
+      return false;
+    }
+  }
+
+  function nextAllowed(at) {
+    return (at || 0) + CACHE_MS;
+  }
+
+  async function loadCatalog(force) {
+    const cached = await readCache();
+    const now = Date.now();
+    if (cached) fetchedAt = cached.fetchedAt;
+
+    if (!force && cached && now - cached.fetchedAt < CACHE_MS) {
+      return { records: cached.records, fetchedAt: cached.fetchedAt, fromCache: true, reason: "fresh-cache" };
+    }
+
+    if (force && cached && now - cached.fetchedAt < CACHE_MS) {
+      const when = formatPT(nextAllowed(cached.fetchedAt));
+      toast("CelesTrak updates every 2 hours. Next refresh after " + when + ".");
+      return { records: cached.records, fetchedAt: cached.fetchedAt, fromCache: true, reason: "rate-limit-local" };
+    }
+
+    $loaderText.textContent = "Fetching live orbits from CelesTrak…";
+    try {
+      const res = await fetch(GP_URL, { cache: "no-store" });
+      const body = await res.text();
+      if (res.status === 403) {
+        const notUpdated = /not updated/i.test(body) || /once every 2 hours/i.test(body);
+        if (cached) {
+          toast(notUpdated
+            ? "CelesTrak says this catalog has not updated since the last download. Using cached data."
+            : "CelesTrak returned HTTP 403 (rate limit). Using cached data. Updates are every 2 hours.");
+          return { records: cached.records, fetchedAt: cached.fetchedAt, fromCache: true, reason: "403", detail: body.slice(0, 280) };
+        }
+        throw new Error("CelesTrak returned HTTP 403. " + (body.trim().slice(0, 240) || "Rate limited. Data updates every 2 hours."));
+      }
+      if (!res.ok) {
+        if (cached) {
+          toast("CelesTrak returned HTTP " + res.status + ". Using cached data.");
+          return { records: cached.records, fetchedAt: cached.fetchedAt, fromCache: true, reason: "http-" + res.status };
+        }
+        throw new Error("CelesTrak returned HTTP " + res.status + ".");
+      }
+      const rows = parseCsv(body);
+      const records = [];
+      for (let i = 0; i < rows.length; i++) {
+        const omm = rowToOmm(rows[i]);
+        if (omm) records.push(omm);
+      }
+      if (!records.length) throw new Error("CelesTrak returned no usable GP records.");
+      const at = Date.now();
+      const saved = await writeCache(records, at);
+      if (!saved) toast("Catalog loaded, but the browser would not cache it locally.");
+      return { records, fetchedAt: at, fromCache: false, reason: "network" };
+    } catch (err) {
+      if (cached) {
+        toast((err && err.message ? err.message : "Network error") + " Using cached data.");
+        return { records: cached.records, fetchedAt: cached.fetchedAt, fromCache: true, reason: "network-error" };
+      }
+      throw err;
+    }
+  }
+
+  function buildMetas(records) {
+    metas = records.map((r) => {
+      const group = classify(r.OBJECT_NAME, r.MEAN_MOTION);
+      counts[group] = (counts[group] || 0) + 1;
+      return {
+        name: r.OBJECT_NAME,
+        id: r.NORAD_CAT_ID,
+        group,
+        color: GROUPS[GROUP_INDEX[group]].color,
+        isIss: r.NORAD_CAT_ID === ISS_ID || /^ISS\b/.test(r.OBJECT_NAME)
+      };
+    });
+  }
+
+  function renderFilters() {
+    $filters.innerHTML = "";
+    GROUPS.forEach((g) => {
+      const row = document.createElement("label");
+      row.className = "row";
+      row.innerHTML =
+        '<input type="checkbox"' + (enabled[g.id] ? " checked" : "") + ' data-g="' + g.id + '">' +
+        '<span class="swatch" style="background:' + g.color + '"></span>' +
+        '<span class="name">' + g.label + "</span>" +
+        '<span class="count">' + (counts[g.id] || 0).toLocaleString() + "</span>";
+      row.querySelector("input").addEventListener("change", (e) => {
+        enabled[g.id] = e.target.checked;
+        if (selected >= 0 && metas[selected] && !enabled[metas[selected].group]) clearCard();
+      });
+      $filters.appendChild(row);
+    });
+  }
+
+  function workerSource() {
+    const license = "/* satellite.js v7.2.0 MIT License — Copyright (C) 2013 Shashwat Kandadai, UCSC Jack Baskin School of Engineering */\n";
+    const bundle = document.getElementById("satellite-js").textContent;
+    return license + bundle + "\n" + [
+      "let satrecs = [];",
+      "function build(records) {",
+      "  satrecs = new Array(records.length);",
+      "  let failed = 0;",
+      "  for (let i = 0; i < records.length; i++) {",
+      "    try { satrecs[i] = satellite.json2satrec(records[i]); }",
+      "    catch (e) { satrecs[i] = null; failed++; }",
+      "    if (satrecs[i] && satrecs[i].error) { satrecs[i] = null; failed++; }",
+      "  }",
+      "  return failed;",
+      "}",
+      "function propagateAll(timeMs) {",
+      "  const n = satrecs.length;",
+      "  const pos = new Float32Array(n * 3);",
+      "  const vel = new Float32Array(n * 3);",
+      "  const alt = new Float32Array(n);",
+      "  const ok = new Uint8Array(n);",
+      "  const date = new Date(timeMs);",
+      "  const gmst = satellite.gstime(date);",
+      "  for (let i = 0; i < n; i++) {",
+      "    const rec = satrecs[i];",
+      "    if (!rec) continue;",
+      "    const pv = satellite.propagate(rec, date);",
+      "    if (!pv || !pv.position || pv.position === false) continue;",
+      "    const p = pv.position, v = pv.velocity || { x:0, y:0, z:0 };",
+      "    const ecf = satellite.eciToEcf(p, gmst);",
+      "    const ev = satellite.eciToEcfVelocity(p, v, gmst);",
+      "    const geo = satellite.eciToGeodetic(p, gmst);",
+      "    const i3 = i * 3;",
+      "    pos[i3] = ecf.x; pos[i3+1] = ecf.y; pos[i3+2] = ecf.z;",
+      "    vel[i3] = ev.x; vel[i3+1] = ev.y; vel[i3+2] = ev.z;",
+      "    alt[i] = geo.height;",
+      "    ok[i] = 1;",
+      "  }",
+      "  return { pos, vel, alt, ok };",
+      "}",
+      "self.onmessage = function (e) {",
+      "  const msg = e.data;",
+      "  if (msg.type === 'init') {",
+      "    const failed = build(msg.records);",
+      "    self.postMessage({ type: 'ready', count: satrecs.length, failed });",
+      "  } else if (msg.type === 'propagate') {",
+      "    const r = propagateAll(msg.timeMs);",
+      "    self.postMessage({ type: 'positions', timeMs: msg.timeMs, pos: r.pos, vel: r.vel, alt: r.alt, ok: r.ok }, [r.pos.buffer, r.vel.buffer, r.alt.buffer, r.ok.buffer]);",
+      "  }",
+      "};"
+    ].join("\n");
+  }
+
+  function startWorker(records) {
+    return new Promise((resolve, reject) => {
+      try {
+        const blob = new Blob([workerSource()], { type: "text/javascript" });
+        const url = URL.createObjectURL(blob);
+        worker = new Worker(url);
+        URL.revokeObjectURL(url);
+        worker.onerror = (ev) => {
+          console.warn("Worker failed, falling back to main thread", ev);
+          try { worker.terminate(); } catch (_) {}
+          worker = null;
+          fallbackMainThread(records);
+          resolve("main");
+        };
+        worker.onmessage = (e) => {
+          const msg = e.data;
+          if (msg.type === "ready") {
+            workerReady = true;
+            requestPropagate(true);
+            resolve("worker");
+          } else if (msg.type === "positions") {
+            applySample(msg);
+          }
+        };
+        worker.postMessage({ type: "init", records });
+      } catch (err) {
+        console.warn(err);
+        fallbackMainThread(records);
+        resolve("main");
+      }
+    });
+  }
+
+  function fallbackMainThread(records) {
+    useMainThread = true;
+    satrecs = records.map((r) => {
+      try { return satellite.json2satrec(r); } catch { return null; }
+    });
+    workerReady = true;
+    requestPropagate(true);
+  }
+
+  let firstPosResolve = null;
+  const firstPositions = new Promise((r) => { firstPosResolve = r; });
+
+  function applySample(msg) {
+    pos = msg.pos;
+    vel = msg.vel;
+    alt = msg.alt;
+    ok = msg.ok;
+    sampleTime = msg.timeMs;
+    propBusy = false;
+    if (firstPosResolve) { firstPosResolve(); firstPosResolve = null; }
+  }
+
+  function propagateMain(timeMs) {
+    const n = satrecs.length;
+    const p = new Float32Array(n * 3);
+    const v = new Float32Array(n * 3);
+    const a = new Float32Array(n);
+    const o = new Uint8Array(n);
+    const date = new Date(timeMs);
+    const gmst = satellite.gstime(date);
+    // Batch across time slices if needed — here we do a full pass; 10k is typically < 150ms.
+    for (let i = 0; i < n; i++) {
+      const rec = satrecs[i];
+      if (!rec) continue;
+      const pv = satellite.propagate(rec, date);
+      if (!pv || !pv.position || pv.position === false) continue;
+      const ecf = satellite.eciToEcf(pv.position, gmst);
+      const ev = satellite.eciToEcfVelocity(pv.position, pv.velocity || { x: 0, y: 0, z: 0 }, gmst);
+      const geo = satellite.eciToGeodetic(pv.position, gmst);
+      const i3 = i * 3;
+      p[i3] = ecf.x; p[i3 + 1] = ecf.y; p[i3 + 2] = ecf.z;
+      v[i3] = ev.x; v[i3 + 1] = ev.y; v[i3 + 2] = ev.z;
+      a[i] = geo.height;
+      o[i] = 1;
+    }
+    applySample({ timeMs, pos: p, vel: v, alt: a, ok: o });
+  }
+
+  let mainPropHandle = 0;
+  function requestPropagate(force) {
+    if (!workerReady || !metas.length) return;
+    if (propBusy && !force) return;
+    const drift = Math.abs(simTime - sampleTime);
+    const maxDrift = speed <= 2 ? 1000 : Math.min(20000, 800 * speed);
+    if (!force && sampleTime && drift < Math.max(400, Math.min(maxDrift, 4000))) return;
+    propBusy = true;
+    const t = simTime;
+    if (useMainThread) {
+      if (mainPropHandle) cancelAnimationFrame(mainPropHandle);
+      mainPropHandle = requestAnimationFrame(() => {
+        propagateMain(t);
+      });
+    } else if (worker) {
+      worker.postMessage({ type: "propagate", timeMs: t });
+    }
+  }
+
+  function currentPos(i, out) {
+    const i3 = i * 3;
+    const dt = (simTime - sampleTime) / 1000;
+    out[0] = pos[i3] + vel[i3] * dt;
+    out[1] = pos[i3 + 1] + vel[i3 + 1] * dt;
+    out[2] = pos[i3 + 2] + vel[i3 + 2] * dt;
+    return out;
+  }
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cx = width / 2;
+    cy = height / 2;
+  }
+
+  function updateCamera() {
+    const cyaw = Math.cos(yaw), syaw = Math.sin(yaw);
+    const cp = Math.cos(pitch), sp = Math.sin(pitch);
+    camX = cp * cyaw; camY = cp * syaw; camZ = sp;
+    rx = -camY; ry = camX; rz = 0;
+    let rlen = Math.hypot(rx, ry, rz);
+    if (rlen < 1e-6) { rx = 1; ry = 0; rz = 0; rlen = 1; }
+    rx /= rlen; ry /= rlen; rz /= rlen;
+    ux = camY * rz - camZ * ry;
+    uy = camZ * rx - camX * rz;
+    uz = camX * ry - camY * rx;
+    scale = (Math.min(width, height) * 0.46) / viewRadius;
+  }
+
+  function projectRaw(x, y, z) {
+    const vx = x * rx + y * ry + z * rz;
+    const vy = x * ux + y * uy + z * uz;
+    const vz = x * camX + y * camY + z * camZ;
+    return { vx, vy, vz, sx: cx + vx * scale, sy: cy - vy * scale };
+  }
+
+  function occluded(vx, vy, vz) {
+    const rho2 = vx * vx + vy * vy;
+    const R2 = EARTH_R * EARTH_R;
+    if (rho2 >= R2) return false;
+    return vz < Math.sqrt(R2 - rho2);
+  }
+
+  function sunEcf(date) {
+    const gmst = satellite.gstime(date);
+    const jd = satellite.jday(date);
+    const n = jd - 2451545.0;
+    const L = (280.460 + 0.9856474 * n) % 360;
+    const g = ((357.528 + 0.9856003 * n) % 360) * Math.PI / 180;
+    const lam = (L + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * Math.PI / 180;
+    const eps = (23.439 - 0.0000004 * n) * Math.PI / 180;
+    const x = Math.cos(lam);
+    const y = Math.cos(eps) * Math.sin(lam);
+    const z = Math.sin(eps) * Math.sin(lam);
+    const e = satellite.eciToEcf({ x, y, z }, gmst);
+    const m = Math.hypot(e.x, e.y, e.z) || 1;
+    return { x: e.x / m, y: e.y / m, z: e.z / m };
+  }
+
+  function drawEarth(date) {
+    const rpx = EARTH_R * scale;
+    const sun = sunEcf(date);
+    const sl = projectRaw(sun.x * EARTH_R, sun.y * EARTH_R, sun.z * EARTH_R);
+
+    // Atmosphere glow
+    const glow = ctx.createRadialGradient(cx, cy, rpx * 0.92, cx, cy, rpx * 1.18);
+    glow.addColorStop(0, "rgba(90, 170, 255, 0.18)");
+    glow.addColorStop(0.55, "rgba(40, 120, 220, 0.08)");
+    glow.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(cx, cy, rpx * 1.18, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.max(1, rpx), 0, Math.PI * 2);
+    ctx.clip();
+
+    ctx.fillStyle = "#071624";
+    ctx.fill();
+
+    const lx = cx + (sl.vx / EARTH_R) * rpx * 0.45;
+    const ly = cy - (sl.vy / EARTH_R) * rpx * 0.45;
+    const day = ctx.createRadialGradient(lx, ly, rpx * 0.05, lx, ly, rpx * 1.45);
+    day.addColorStop(0, "rgba(186, 222, 232, 0.95)");
+    day.addColorStop(0.22, "rgba(62, 140, 150, 0.75)");
+    day.addColorStop(0.48, "rgba(16, 72, 108, 0.55)");
+    day.addColorStop(0.72, "rgba(6, 22, 48, 0.72)");
+    day.addColorStop(1, "rgba(1, 4, 14, 0.96)");
+    ctx.fillStyle = day;
+    ctx.fillRect(cx - rpx - 2, cy - rpx - 2, rpx * 2 + 4, rpx * 2 + 4);
+
+    // Polar caps
+    drawCap(1);
+    drawCap(-1);
+
+    // Graticule
+    ctx.lineWidth = Math.max(0.6, 1.0);
+    ctx.strokeStyle = "rgba(200, 230, 255, 0.22)";
+    drawParallel(0, true);
+    ctx.strokeStyle = "rgba(200, 230, 255, 0.12)";
+    for (const lat of [-60, -30, 30, 60]) drawParallel(lat, false);
+    for (let lon = -150; lon <= 180; lon += 30) drawMeridian(lon, lon === 0);
+    ctx.restore();
+
+    // Limb highlight
+    ctx.beginPath();
+    ctx.arc(cx, cy, rpx, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(180, 220, 255, 0.28)";
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+  }
+
+  function drawCap(sign) {
+    const pts = [];
+    const lat = sign * 72 * Math.PI / 180;
+    const cl = Math.cos(lat), sl = Math.sin(lat);
+    for (let i = 0; i <= 48; i++) {
+      const lon = (i / 48) * Math.PI * 2;
+      const x = EARTH_R * cl * Math.cos(lon);
+      const y = EARTH_R * cl * Math.sin(lon);
+      const z = EARTH_R * sl;
+      const p = projectRaw(x, y, z);
+      if (p.vz > 0) pts.push(p);
+    }
+    if (pts.length < 6) return;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].sx, pts[0].sy);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].sx, pts[i].sy);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(230, 242, 255, 0.22)";
+    ctx.fill();
+  }
+
+  function drawParallel(latDeg, strong) {
+    const lat = latDeg * Math.PI / 180;
+    const cl = Math.cos(lat), sl = Math.sin(lat);
+    let started = false;
+    ctx.beginPath();
+    for (let i = 0; i <= 128; i++) {
+      const lon = (i / 128) * Math.PI * 2;
+      const x = EARTH_R * cl * Math.cos(lon);
+      const y = EARTH_R * cl * Math.sin(lon);
+      const z = EARTH_R * sl;
+      const p = projectRaw(x, y, z);
+      if (p.vz <= 0) { started = false; continue; }
+      if (!started) { ctx.moveTo(p.sx, p.sy); started = true; }
+      else ctx.lineTo(p.sx, p.sy);
+    }
+    ctx.strokeStyle = strong ? "rgba(255, 210, 140, 0.35)" : "rgba(200, 230, 255, 0.14)";
+    ctx.stroke();
+  }
+
+  function drawMeridian(lonDeg, strong) {
+    const lon = lonDeg * Math.PI / 180;
+    const c = Math.cos(lon), s = Math.sin(lon);
+    let started = false;
+    ctx.beginPath();
+    for (let i = 0; i <= 64; i++) {
+      const lat = (-90 + (180 * i) / 64) * Math.PI / 180;
+      const cl = Math.cos(lat), sl = Math.sin(lat);
+      const x = EARTH_R * cl * c;
+      const y = EARTH_R * cl * s;
+      const z = EARTH_R * sl;
+      const p = projectRaw(x, y, z);
+      if (p.vz <= 0) { started = false; continue; }
+      if (!started) { ctx.moveTo(p.sx, p.sy); started = true; }
+      else ctx.lineTo(p.sx, p.sy);
+    }
+    ctx.strokeStyle = strong ? "rgba(255, 210, 140, 0.35)" : "rgba(200, 230, 255, 0.12)";
+    ctx.stroke();
+  }
+
+  const tmp = [0, 0, 0];
+  let projCache = [];
+
+  function drawSats() {
+    if (!ok.length) return;
+    const n = metas.length;
+    if (projCache.length !== n) projCache = new Array(n);
+    const sizes = {};
+    GROUPS.forEach((g) => { sizes[g.id] = viewRadius > 30000 ? 1.4 : viewRadius > 16000 ? 1.8 : 2.3; });
+    let issIdx = -1;
+    for (let i = 0; i < n; i++) {
+      if (!ok[i]) { projCache[i] = null; continue; }
+      const m = metas[i];
+      if (!enabled[m.group]) { projCache[i] = null; continue; }
+      currentPos(i, tmp);
+      const pr = projectRaw(tmp[0], tmp[1], tmp[2]);
+      if (occluded(pr.vx, pr.vy, pr.vz)) { projCache[i] = null; continue; }
+      pr.i = i;
+      projCache[i] = pr;
+      if (m.isIss) { issIdx = i; continue; }
+      const s = sizes[m.group];
+      ctx.fillStyle = m.color;
+      ctx.fillRect(pr.sx - s * 0.5, pr.sy - s * 0.5, s, s);
+    }
+    if (issIdx >= 0 && projCache[issIdx]) {
+      const pr = projCache[issIdx];
+      const pulse = 1 + 0.25 * Math.sin(performance.now() / 220);
+      const r = 5 * pulse;
+      ctx.beginPath();
+      ctx.arc(pr.sx, pr.sy, r + 3, 0, Math.PI * 2);
+      ctx.strokeStyle = "rgba(255, 230, 160, 0.85)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(pr.sx, pr.sy, 3.2, 0, Math.PI * 2);
+      ctx.fillStyle = "#ffe08a";
+      ctx.fill();
+    }
+    if (selected >= 0 && projCache[selected]) {
+      const pr = projCache[selected];
+      ctx.beginPath();
+      ctx.arc(pr.sx, pr.sy, 7, 0, Math.PI * 2);
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+    }
+  }
+
+  function draw() {
+    ctx.fillStyle = "#05070c";
+    ctx.fillRect(0, 0, width, height);
+    // faint stars
+    if (!_stars) seedStars();
+    ctx.fillStyle = "rgba(255,255,255,0.55)";
+    for (let i = 0; i < _stars.length; i += 3) {
+      ctx.globalAlpha = _stars[i + 2];
+      ctx.fillRect(_stars[i] * width, _stars[i + 1] * height, 1.2, 1.2);
+    }
+    ctx.globalAlpha = 1;
+    updateCamera();
+    const date = new Date(simTime);
+    drawEarth(date);
+    drawSats();
+    if (ok.length) lastFrameDrawnWithData = true;
+  }
+
+  let _stars = null;
+  function seedStars() {
+    _stars = [];
+    for (let i = 0; i < 160; i++) {
+      _stars.push(Math.random(), Math.random(), 0.15 + Math.random() * 0.5);
+    }
+  }
+
+  function tick(nowp) {
+    const dt = Math.min(0.1, (nowp - lastWall) / 1000);
+    lastWall = nowp;
+    if (live && Math.abs(speed - 1) < 0.02) {
+      simTime = Date.now();
+    } else {
+      live = false;
+      simTime += dt * 1000 * speed;
+    }
+    $simClock.textContent = formatUTC(simTime);
+    requestPropagate(false);
+    draw();
+    requestAnimationFrame(tick);
+  }
+
+  function pick(sx, sy) {
+    let best = -1, bestD = 16;
+    for (let i = 0; i < projCache.length; i++) {
+      const p = projCache[i];
+      if (!p) continue;
+      const d = Math.hypot(p.sx - sx, p.sy - sy);
+      const pad = metas[i].isIss ? 20 : 16;
+      if (d < pad && d < bestD) { bestD = d; best = i; }
+    }
+    return best;
+  }
+
+  function showCard(i) {
+    selected = i;
+    const m = metas[i];
+    currentPos(i, tmp);
+    const r = Math.hypot(tmp[0], tmp[1], tmp[2]);
+    const altitude = ok[i] ? alt[i] + ( /* height is from last sample; use geometric as fallback */ 0) : (r - EARTH_R);
+    // Improve altitude by using current geometric height from interpolated radius; geodetic varies slowly.
+    const dt = (simTime - sampleTime) / 1000;
+    const altNow = (ok[i] ? alt[i] : (r - EARTH_R));
+    document.getElementById("cardName").textContent = m.name;
+    document.getElementById("cardId").textContent = String(m.id);
+    document.getElementById("cardAlt").textContent = (Number.isFinite(altNow) ? altNow.toFixed(1) : "—") + " km";
+    document.getElementById("cardGroup").textContent = GROUPS[GROUP_INDEX[m.group]].label;
+    document.getElementById("cardR").textContent = r.toFixed(1) + " km";
+    $card.classList.add("visible");
+  }
+
+  function clearCard() {
+    selected = -1;
+    $card.classList.remove("visible");
+  }
+
+  function onPointerDown(e) {
+    canvas.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 2) {
+      const pts = [...pointers.values()];
+      pinchStartDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      pinchStartRadius = viewRadius;
+      dragging = false;
+    } else {
+      dragging = true;
+      dragMoved = false;
+      lastPx = e.clientX; lastPy = e.clientY; lastPid = e.pointerId;
+    }
+  }
+  function onPointerMove(e) {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 2 && pinchStartDist > 0) {
+      const pts = [...pointers.values()];
+      const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      if (d > 0) {
+        viewRadius = Math.min(90000, Math.max(7000, pinchStartRadius * (pinchStartDist / d)));
+      }
+      return;
+    }
+    if (!dragging || e.pointerId !== lastPid) return;
+    const dx = e.clientX - lastPx, dy = e.clientY - lastPy;
+    if (Math.hypot(dx, dy) > 3) dragMoved = true;
+    lastPx = e.clientX; lastPy = e.clientY;
+    yaw -= dx * 0.005;
+    pitch = Math.max(-1.2, Math.min(1.2, pitch + dy * 0.005));
+  }
+  function onPointerUp(e) {
+    const wasDrag = dragMoved;
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinchStartDist = 0;
+    if (pointers.size === 0) dragging = false;
+    if (e.pointerId === lastPid) {
+      lastPid = null;
+      if (!wasDrag) {
+        const i = pick(e.clientX, e.clientY);
+        if (i >= 0) showCard(i);
+        else clearCard();
+      }
+    }
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+  }
+
+  canvas.addEventListener("pointerdown", onPointerDown);
+  canvas.addEventListener("pointermove", onPointerMove);
+  canvas.addEventListener("pointerup", onPointerUp);
+  canvas.addEventListener("pointercancel", onPointerUp);
+  canvas.addEventListener("pointerleave", (e) => { if (pointers.has(e.pointerId)) onPointerUp(e); });
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const f = Math.exp(e.deltaY * 0.0015);
+    viewRadius = Math.min(90000, Math.max(7000, viewRadius * f));
+  }, { passive: false });
+
+  $speed.addEventListener("input", () => {
+    speed = speedFromSlider($speed.value);
+    $speedVal.textContent = formatSpeed(speed);
+    if (Math.abs(speed - 1) > 0.02) live = false;
+  });
+  $now.addEventListener("click", () => {
+    simTime = Date.now();
+    live = true;
+    speed = 1;
+    $speed.value = 0;
+    $speedVal.textContent = "1×";
+    requestPropagate(true);
+  });
+  $refresh.addEventListener("click", async () => {
+    $refresh.disabled = true;
+    try {
+      await boot(true);
+    } finally {
+      $refresh.disabled = false;
+    }
+  });
+  $toggle.addEventListener("click", () => {
+    $panel.classList.toggle("open");
+  });
+  document.getElementById("cardClose").addEventListener("click", clearCard);
+  window.addEventListener("resize", resize);
+
+  function updateHeader(result) {
+    const n = metas.length.toLocaleString();
+    const src = result.fromCache ? "cached" : "live";
+    const updated = formatPT(result.fetchedAt);
+    setStatus(
+      "<strong>" + n + "</strong> active objects (" + src + ")<br>Last updated " + updated +
+      "<br><span style='opacity:.8'>Source: CelesTrak GP GROUP=active · CSV</span>"
+    );
+    const remain = nextAllowed(result.fetchedAt) - Date.now();
+    $refresh.disabled = remain > 0 && !result.fromCache ? false : false;
+    // Button stays enabled so the user can press it; the handler respects the 2h limit.
+  }
+
+  async function boot(force) {
+    $loader.classList.remove("hidden");
+    $loaderText.textContent = force ? "Refreshing catalog…" : "Loading catalog…";
+    try {
+      const result = await loadCatalog(!!force);
+      // Reset counts if reloading
+      GROUPS.forEach((g) => { counts[g.id] = 0; });
+      if (worker) { try { worker.terminate(); } catch (_) {} worker = null; workerReady = false; }
+      useMainThread = false;
+      satrecs = null;
+      pos = new Float32Array(0); vel = new Float32Array(0); alt = new Float32Array(0); ok = new Uint8Array(0);
+      sampleTime = 0; propBusy = false; selected = -1; clearCard();
+      fetchedAt = result.fetchedAt;
+      $loaderText.textContent = "Initializing SGP4 for " + result.records.length.toLocaleString() + " satellites…";
+      buildMetas(result.records);
+      renderFilters();
+      updateHeader(result);
+      await startWorker(result.records);
+      await Promise.race([
+        firstPositions,
+        new Promise((r) => setTimeout(r, 15000))
+      ]);
+      $loader.classList.add("hidden");
+      window.__SAT_READY__ = !!(ok && ok.length);
+      document.documentElement.dataset.ready = window.__SAT_READY__ ? "1" : "0";
+      window.__SAT_COUNT__ = metas.length;
+    } catch (err) {
+      $loader.classList.add("hidden");
+      const msg = (err && err.message) ? err.message : String(err);
+      setStatus("Could not load satellite data. " + msg, true);
+      toast(msg, 8000);
+      window.__SAT_ERROR__ = msg;
+    }
+  }
+
+  resize();
+  requestAnimationFrame(tick);
+  boot(false);
+})();
+
+  </script>
+</body>
+</html>
