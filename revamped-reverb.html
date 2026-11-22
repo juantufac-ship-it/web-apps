@@ -108,6 +108,24 @@ body {
   letter-spacing: 0.01em;
 }
 
+.meter {
+  height: 8px;
+  border-radius: 4px;
+  background: #24221d;
+  overflow: hidden;
+  margin: -4px 0 12px;
+}
+.meter-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #6fae6a, #c9a06a 70%, #d8644f);
+  transition: width 60ms linear;
+}
+.meter-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0 0 4px;
+}
 .status.is-recording {
   background: #2a1010;
   border-color: #5a2222;
@@ -560,6 +578,8 @@ input[type="range"] {
       Microphone access needs HTTPS or localhost. Start a local server (see the README) and open this page from there.
     </p>
     <p id="status" class="status" aria-live="polite">Ready</p>
+    <p class="meter-label" id="meter-label">Output level</p>
+    <div class="meter" aria-hidden="true"><div id="meter-fill" class="meter-fill"></div></div>
 
     <section class="panel transport" aria-label="Transport">
       <div class="clock-row">
@@ -714,6 +734,8 @@ input[type="range"] {
     sessionList: $("session-list"),
     emptySessions: $("empty-sessions"),
     dropOverlay: $("drop-overlay"),
+    meterFill: $("meter-fill"),
+    meterLabel: $("meter-label"),
   };
 
   const state = {
@@ -751,6 +773,14 @@ input[type="range"] {
     recordCancelled: false,
     recFinishResolve: null,
     trackNodes: new Map(),
+    mediaEls: [],
+    meter: null,
+    meterRaf: 0,
+    // Set when the mic was opened/closed after this AudioContext was made.
+    // On Android, opening the mic switches the phone's audio routing, and an
+    // AudioContext created before that can stay stuck on a silent/earpiece
+    // output. We rebuild the context on the next Play tap.
+    ctxStale: false,
   };
 
   let irTimer = 0;
@@ -817,7 +847,19 @@ input[type="range"] {
     return types.find((t) => MediaRecorder.isTypeSupported(t)) || "";
   }
 
+  function teardownContext() {
+    const old = engine.ctx;
+    stopGraphSources();
+    cancelAnimationFrame(engine.meterRaf);
+    engine.ctx = null;
+    engine.meter = null;
+    engine.trackNodes.clear();
+    engine.ctxStale = false;
+    if (old && old.state !== "closed") old.close().catch(() => {});
+  }
+
   async function ensureContext() {
+    if (engine.ctx && engine.ctx.state === "closed") teardownContext();
     if (engine.ctx) {
       // Don't await resume(): autoplay policy can hang this promise
       // when there is no user gesture (import, headless checks).
@@ -828,10 +870,18 @@ input[type="range"] {
     if (!Ctx) throw new Error("Web Audio is not supported in this browser.");
     const ctx = new Ctx();
     engine.ctx = ctx;
+    engine.ctxStale = false;
+    try {
+      // Chrome/Android ignore this; Safari uses it to pick the media (loud-speaker) route.
+      if (navigator.audioSession) navigator.audioSession.type = "play-and-record";
+    } catch (_) { /* */ }
 
     engine.master = ctx.createGain();
     engine.master.gain.value = 1;
     engine.master.connect(ctx.destination);
+    engine.meter = ctx.createAnalyser();
+    engine.meter.fftSize = 1024;
+    engine.master.connect(engine.meter);
 
     engine.dry = ctx.createGain();
     engine.dry.gain.value = 1;
@@ -861,12 +911,53 @@ input[type="range"] {
     return ctx;
   }
 
-  async function unlockContext() {
+  // Call synchronously from a tap handler (before any await) so creating /
+  // resuming the AudioContext counts as a user gesture.
+  async function unlockContext(opts) {
+    const fresh = opts && opts.fresh;
+    if (engine.ctx && (engine.ctx.state === "closed" || (fresh && engine.ctxStale && state.transport === "stopped"))) {
+      teardownContext();
+    }
     const ctx = await ensureContext();
-    if (ctx.state === "suspended") {
-      try { await ctx.resume(); } catch (_) { /* autoplay policy */ }
+    if (ctx.state !== "running") {
+      try { await Promise.race([ctx.resume(), new Promise((r) => setTimeout(r, 1500))]); } catch (_) { /* autoplay policy */ }
     }
     return ctx;
+  }
+
+  function startMeter() {
+    cancelAnimationFrame(engine.meterRaf);
+    const buf = new Float32Array(1024);
+    let hold = 0;
+    const tick = () => {
+      let peak = 0;
+      if (engine.meter && engine.ctx && engine.ctx.state === "running") {
+        engine.meter.getFloatTimeDomainData(buf);
+        for (let i = 0; i < buf.length; i++) {
+          const v = Math.abs(buf[i]);
+          if (v > peak) peak = v;
+        }
+      }
+      for (const el of engine.mediaEls) {
+        if (!el.paused && !el.ended && !el.muted) peak = Math.max(peak, 0.5 * el.volume);
+      }
+      hold = Math.max(peak, hold * 0.9);
+      ui.meterFill.style.width = `${Math.min(100, Math.round(Math.sqrt(hold) * 100))}%`;
+      if (state.transport === "playing" || state.transport === "recording" || state.transport === "counting") {
+        if (engine.ctx && engine.ctx.state !== "running") {
+          ui.meterLabel.textContent = "Output level: audio is paused by the browser. Tap Play again.";
+        } else {
+          ui.meterLabel.textContent = hold > 0.002 ? "Output level: sound is playing" : "Output level";
+        }
+      }
+      if (state.transport !== "stopped" || hold > 0.001) {
+        engine.meterRaf = requestAnimationFrame(tick);
+      } else {
+        ui.meterFill.style.width = "0%";
+        ui.meterLabel.textContent = "Output level";
+      }
+    };
+    engine.meterRaf = requestAnimationFrame(tick);
   }
 
   function generateImpulse(ctx, decaySec) {
@@ -922,6 +1013,11 @@ input[type="range"] {
       try { node.disconnect(); } catch (_) { /* */ }
     }
     engine.clickNodes = [];
+    for (const el of engine.mediaEls) {
+      try { el.pause(); } catch (_) { /* */ }
+      if (el.__url) URL.revokeObjectURL(el.__url);
+    }
+    engine.mediaEls = [];
   }
 
   function updateLiveTrackGains(track) {
@@ -934,8 +1030,18 @@ input[type="range"] {
     nodes.delSend.gain.setTargetAtTime(track.delaySend, t, 0.02);
   }
 
+  function updateMediaElGains() {
+    for (const el of engine.mediaEls) {
+      const track = state.tracks.find((t) => t.id === el.__trackId);
+      if (!track) continue;
+      el.volume = Math.min(1, Math.max(0, track.volume));
+      el.muted = !isAudible(track);
+    }
+  }
+
   function refreshAllLiveGains() {
     for (const track of state.tracks) updateLiveTrackGains(track);
+    updateMediaElGains();
   }
 
   function connectTrackSource(track, when, offsetSec) {
@@ -971,9 +1077,34 @@ input[type="range"] {
     return source;
   }
 
+  // Fallback for takes the browser could record but not decode: play the
+  // original recording through a plain <audio> element.
+  function startMediaElementTrack(track, when) {
+    if (!track.blob) return;
+    const el = new Audio();
+    el.setAttribute("playsinline", "");
+    el.preload = "auto";
+    el.__url = URL.createObjectURL(track.blob);
+    el.__trackId = track.id;
+    el.src = el.__url;
+    el.volume = Math.min(1, Math.max(0, track.volume));
+    el.muted = !isAudible(track);
+    engine.mediaEls.push(el);
+    const delayMs = Math.max(0, (when - engine.ctx.currentTime) * 1000);
+    const go = () => {
+      if (!engine.mediaEls.includes(el)) return;
+      const p = el.play();
+      if (p && p.catch) p.catch(() => setStatus("Tap Play again to hear this take."));
+    };
+    if (delayMs > 5) setTimeout(go, delayMs); else go();
+  }
+
   function startPlaybackAt(when) {
     for (const track of state.tracks) {
-      if (!track.buffer) continue;
+      if (!track.buffer) {
+        startMediaElementTrack(track, when);
+        continue;
+      }
       const offset = Math.max(0, (track.latencyOffsetMs || 0) / 1000);
       connectTrackSource(track, when, offset);
     }
@@ -1028,7 +1159,8 @@ input[type="range"] {
       ui.clock.textContent = formatTime(elapsed);
       if (state.transport === "playing") {
         const total = sessionDuration();
-        if (total > 0 && elapsed >= total + 0.05) {
+        const mediaBusy = engine.mediaEls.some((el) => !el.ended && !el.error && (!el.paused || (el.currentTime === 0 && elapsed < total + 3)));
+        if (elapsed >= total + 0.05 && !mediaBusy && (total > 0 || engine.mediaEls.length)) {
           stopAll("Playback finished.");
           return;
         }
@@ -1072,13 +1204,14 @@ input[type="range"] {
       setStatus("Nothing to play yet. Record a take first.");
       return;
     }
-    await unlockContext();
+    await unlockContext({ fresh: true });
     stopGraphSources();
     const ctx = engine.ctx;
     const beats = state.countInBeats;
     const tCount = ctx.currentTime + 0.05;
     const countDur = beats > 0 ? scheduleCountIn(tCount, beats, state.bpm) : 0;
     startPlaybackAt(tCount + countDur);
+    startMeter();
     if (beats > 0) {
       state.transport = "counting";
       state.pendingTransport = "playing";
@@ -1111,6 +1244,7 @@ input[type="range"] {
     if (engine.recStream) {
       for (const track of engine.recStream.getTracks()) track.stop();
       engine.recStream = null;
+      engine.ctxStale = true;
     }
   }
 
@@ -1128,6 +1262,7 @@ input[type="range"] {
       return;
     }
     engine.recStream = stream;
+    engine.ctxStale = true;
 
     const mime = pickMime();
     if (typeof MediaRecorder === "undefined") {
@@ -1183,6 +1318,7 @@ input[type="range"] {
         state.playStartedAt = engine.ctx.currentTime;
         ui.record.classList.add("is-hot");
         setStatus("Recording… tap Stop when you’re done.", "is-recording");
+        startMeter();
         cancelAnimationFrame(state.raf);
         tickClock();
       } catch (err) {
@@ -1235,26 +1371,38 @@ input[type="range"] {
     }
 
     const blob = new Blob(chunks, { type });
+    let buffer = null;
     try {
-      const buffer = await decodeBlob(blob);
-      const index = state.tracks.length + 1;
-      state.tracks.push({
-        id: uid(),
-        name: `Track ${index}`,
-        blob,
-        buffer,
-        mimeType: type,
-        volume: 1,
-        muted: false,
-        solo: false,
-        latencyOffsetMs: state.latencyMs,
-        reverbSend: 0.35,
-        delaySend: 0.2,
-      });
-      renderTracks();
-      setStatus(`Captured ${buffer.duration.toFixed(1)}s as Track ${index}.`);
+      buffer = await decodeBlob(blob);
     } catch (err) {
-      setStatus("Could not decode that take. Try another browser or check the mic.");
+      buffer = null;
+    }
+    const index = state.tracks.length + 1;
+    const peak = buffer ? bufferPeak(buffer) : 0;
+    // Phone mics with auto-gain off can record very quietly; lift quiet takes
+    // with the track volume (max 200%) so playback is clearly audible.
+    let volume = 1;
+    if (buffer && peak > 0.0005 && peak < 0.25) volume = Math.min(2, Math.round((0.5 / peak) * 100) / 100);
+    state.tracks.push({
+      id: uid(),
+      name: `Track ${index}`,
+      blob,
+      buffer,
+      mimeType: type,
+      volume,
+      muted: false,
+      solo: false,
+      latencyOffsetMs: buffer ? state.latencyMs : 0,
+      reverbSend: 0.35,
+      delaySend: 0.2,
+    });
+    renderTracks();
+    if (!buffer) {
+      setStatus(`Captured Track ${index}. It will play through the basic audio player on this browser.`);
+    } else if (peak <= 0.0005) {
+      setStatus(`Captured ${buffer.duration.toFixed(1)}s as Track ${index}, but it’s silent. Check that the mic isn’t blocked or used by another app.`);
+    } else {
+      setStatus(`Captured ${buffer.duration.toFixed(1)}s as Track ${index}.${volume > 1 ? " It was quiet, so its volume was raised." : ""}`);
     }
     state.transport = "stopped";
     stopGraphSources();
@@ -1262,6 +1410,18 @@ input[type="range"] {
     ui.play.disabled = false;
     cancelAnimationFrame(state.raf);
     ui.countDisplay.hidden = true;
+  }
+
+  function bufferPeak(buffer) {
+    let peak = 0;
+    for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+      const d = buffer.getChannelData(ch);
+      for (let i = 0; i < d.length; i += 4) {
+        const v = Math.abs(d[i]);
+        if (v > peak) peak = v;
+      }
+    }
+    return peak;
   }
 
   async function decodeBlob(blob) {
@@ -1362,6 +1522,7 @@ input[type="range"] {
           try { nodes.source.stop(); } catch (_) { /* */ }
         }
         engine.trackNodes.delete(track.id);
+        for (const m of engine.mediaEls) if (m.__trackId === track.id) { try { m.pause(); } catch (_) { /* */ } }
         state.tracks = state.tracks.filter((t) => t.id !== track.id);
         renderTracks();
       });
@@ -1373,6 +1534,7 @@ input[type="range"] {
           track[key] = v;
           label.textContent = `${Math.round(v * 100)}${labelSuffix}`;
           updateLiveTrackGains(track);
+          updateMediaElGains();
         });
       };
       bindSlider(".vol", "volume", "%");
@@ -1487,7 +1649,8 @@ input[type="range"] {
     for (const row of rows || []) {
       if (!row || !row.audioBase64) continue;
       const blob = base64ToBlob(row.audioBase64, row.mimeType || "audio/webm");
-      const buffer = await decodeBlob(blob);
+      let buffer = null;
+      try { buffer = await decodeBlob(blob); } catch (_) { buffer = null; }
       out.push({
         id: row.id || uid(),
         name: row.name || `Track ${out.length + 1}`,
@@ -1788,7 +1951,11 @@ input[type="range"] {
   }
 
   function bindControls() {
+    const kick = () => {
+      if (engine.ctx && engine.ctx.state === "suspended") engine.ctx.resume().catch(() => {});
+    };
     ui.play.addEventListener("click", () => {
+      kick();
       playAll().catch((e) => setStatus(e.message || "Playback failed."));
     });
     ui.stop.addEventListener("click", () => {
@@ -1800,6 +1967,7 @@ input[type="range"] {
       stopAll("Stopped");
     });
     ui.record.addEventListener("click", () => {
+      kick();
       startRecording().catch((e) => setStatus(e.message || "Recording failed."));
     });
 
