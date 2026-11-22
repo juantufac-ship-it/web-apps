@@ -164,6 +164,43 @@ body {
   margin: 0 0 12px;
   font-weight: 600;
 }
+.monitor-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.monitor-row .monitor-label { font-weight: 700; font-size: 14px; }
+.seg { display: inline-flex; border-radius: 10px; overflow: hidden; border: 1px solid #4a463d; }
+.seg button {
+  appearance: none; border: 0; background: #2a2823; color: inherit;
+  min-height: 44px; min-width: 88px; padding: 8px 14px; font-weight: 700; font: inherit; font-weight: 700;
+}
+.seg button[aria-pressed="true"] { background: var(--gold); color: #1a140c; }
+.monitor-hint { width: 100%; margin: 2px 0 0; font-size: 13px; color: #e8b27a; }
+.toast {
+  position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+  background: #2e2b25; color: #f3eee4; border: 1px solid #4a463d; border-radius: 12px;
+  padding: 8px 8px 8px 14px; display: flex; align-items: center; gap: 12px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.45); z-index: 50; max-width: calc(100% - 24px);
+}
+.toast button { min-height: 44px; min-width: 72px; border-radius: 10px; border: 0; background: var(--gold); color: #1a140c; font-weight: 800; }
+.track-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  margin: 8px 0 4px;
+  font-size: 13px;
+}
+.tool-group { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tool-group > span:first-child { color: var(--muted); font-weight: 700; }
+.tool-group em { font-style: normal; font-weight: 800; min-width: 54px; text-align: center; }
+.track-tools .btn-tiny { min-width: 44px; padding: 6px 10px; }
+.busy { color: #e8b27a; font-weight: 700; }
+.tracks-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.tracks-head .diag-toggle { margin: 0; }
 .meter-label {
   font-size: 12px;
   color: var(--muted);
@@ -444,13 +481,14 @@ input[type="range"] {
 
 .track-top {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
   margin-bottom: 8px;
 }
 
 .track-name {
-  flex: 1;
+  flex: 1 1 100%;
   min-width: 0;
 }
 
@@ -637,6 +675,15 @@ input[type="range"] {
         <button type="button" id="btn-record" class="btn btn-record">Record</button>
       </div>
 
+      <div class="monitor-row" role="group" aria-label="Monitor while recording">
+        <span class="monitor-label">Monitor while recording:</span>
+        <span class="seg">
+          <button type="button" id="mon-speaker" aria-pressed="true">Speaker</button>
+          <button type="button" id="mon-earbuds" aria-pressed="false">Earbuds</button>
+        </span>
+        <p id="monitor-hint" class="monitor-hint" hidden>Plug in or connect earbuds.</p>
+      </div>
+
       <div class="control-grid">
         <label class="field">
           <span>Count-in</span>
@@ -715,7 +762,11 @@ input[type="range"] {
     <p class="fx-note">Reverb and Delay color playback and monitoring only. New takes are recorded dry.</p>
 
     <section class="panel tracks-panel" aria-label="Tracks">
-      <h2>Tracks</h2>
+      <div class="tracks-head">
+        <h2>Tracks</h2>
+        <button type="button" id="btn-align" class="btn btn-tiny">Auto-align starts</button>
+      </div>
+      <label class="diag-toggle"><input type="checkbox" id="auto-align-new" checked> Auto-align new takes</label>
       <div id="track-list" class="track-list"></div>
       <p id="empty-tracks" class="empty">No tracks yet. Hit Record to capture your first take.</p>
     </section>
@@ -744,6 +795,7 @@ input[type="range"] {
       <p id="empty-sessions" class="empty">No saved sessions on this device yet.</p>
     </section>
   </div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden><span id="toast-text"></span><button type="button" id="toast-undo">Undo</button></div>
   <div id="drop-overlay" class="drop-overlay" hidden>Drop your session .json here</div>
   <script>
 (() => {
@@ -793,6 +845,14 @@ input[type="range"] {
     meterFill: $("meter-fill"),
     meterLabel: $("meter-label"),
     micAlert: $("mic-alert"),
+    alignBtn: $("btn-align"),
+    autoAlignNew: $("auto-align-new"),
+    monSpeaker: $("mon-speaker"),
+    monEarbuds: $("mon-earbuds"),
+    monHint: $("monitor-hint"),
+    toast: $("toast"),
+    toastText: $("toast-text"),
+    toastUndo: $("toast-undo"),
     diagLog: $("diag-log"),
     diagCopy: $("btn-diag-copy"),
     diagClear: $("btn-diag-clear"),
@@ -813,6 +873,8 @@ input[type="range"] {
     reverb: { enabled: true, mix: 0.25, decay: 2.0 },
     delay: { enabled: false, time: 0.28, feedback: 0.3, mix: 0.2 },
     useMediaPlayer: false,
+    monitorMode: "speaker",
+    autoAlignNew: true,
   };
 
   const engine = {
@@ -895,6 +957,91 @@ input[type="range"] {
     }).catch((e) => diag(`enumerateDevices failed: ${e.name}`));
   }
 
+  // ---------- monitor mode: Speaker / Earbuds ----------
+  const MON_KEY = "revamped-reverb.monitorMode";
+  const MON_USER_KEY = "revamped-reverb.monitorModeUserSet";
+  const HEADSET_RE = /head ?set|head ?phone|ear ?buds?|airpods?|bluetooth|\bbt\b|wired|usb|hands-?free|a2dp|buds/i;
+  const SPEAKER_RE = /speaker/i;
+  const outputs = { list: [], headset: null, speaker: null, checked: false };
+
+  function lsGet(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (_) { /* private mode */ } }
+
+  function monitorMode() { return state.monitorMode === "earbuds" ? "earbuds" : "speaker"; }
+
+  function renderMonitor() {
+    const m = monitorMode();
+    ui.monSpeaker.setAttribute("aria-pressed", String(m === "speaker"));
+    ui.monEarbuds.setAttribute("aria-pressed", String(m === "earbuds"));
+    ui.monHint.hidden = !(m === "earbuds" && outputs.checked && !outputs.headset);
+  }
+
+  function setMonitorMode(mode, byUser) {
+    state.monitorMode = mode === "earbuds" ? "earbuds" : "speaker";
+    lsSet(MON_KEY, state.monitorMode);
+    if (byUser) lsSet(MON_USER_KEY, "1");
+    renderMonitor();
+    diag(`monitor mode: ${state.monitorMode}${byUser ? " (chosen by you)" : " (auto)"}; sinkId=${JSON.stringify(desiredSinkId())}`);
+    applySinkEverywhere("monitor");
+  }
+
+  function desiredSinkId() {
+    const m = monitorMode();
+    if (m === "earbuds" && outputs.headset) return outputs.headset.deviceId;
+    if (m === "speaker" && outputs.speaker) return outputs.speaker.deviceId;
+    return ""; // default output (Android routes it to connected earbuds anyway)
+  }
+
+  async function refreshOutputs(reason) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    try {
+      const list = await navigator.mediaDevices.enumerateDevices();
+      const outs = list.filter((d) => d.kind === "audiooutput");
+      const isHeadset = (d) => HEADSET_RE.test(d.label || "") && !/earpiece/i.test(d.label || "");
+      outputs.list = outs;
+      outputs.headset = outs.find((d) => isHeadset(d) && d.deviceId !== "default" && d.deviceId !== "communications")
+        || outs.find(isHeadset) || null;
+      outputs.speaker = outs.find((d) => SPEAKER_RE.test(d.label || "") && !isHeadset(d)) || null;
+      // Labels are blank until mic permission is granted; only then can we tell.
+      outputs.checked = outs.some((d) => d.label);
+      diag(`outputs (${reason}): ${outs.map((d) => `"${d.label || "(no label)"}"`).join(" | ") || "none"}; headset=${outputs.headset ? `"${outputs.headset.label}"` : "none"} speaker=${outputs.speaker ? `"${outputs.speaker.label}"` : "none"}`);
+      const userSet = lsGet(MON_USER_KEY) === "1";
+      if (outputs.headset && !userSet && monitorMode() !== "earbuds") {
+        setMonitorMode("earbuds", false);
+      } else {
+        renderMonitor();
+        applySinkEverywhere("devicechange");
+      }
+    } catch (e) {
+      diag(`enumerateDevices failed: ${e && e.name}`);
+    }
+  }
+
+  async function applySink(ctx, label) {
+    if (!ctx || typeof ctx.setSinkId !== "function" || ctx.state === "closed") return;
+    const id = desiredSinkId();
+    if (ctx.__sinkId === id) return;
+    if (!id && !ctx.__sinkId) { ctx.__sinkId = ""; diag(`${label}: output = default device for ${monitorMode()} mode`); return; }
+    try {
+      await Promise.race([ctx.setSinkId(id), new Promise((r) => setTimeout(r, 800))]);
+      ctx.__sinkId = id;
+      diag(`${label}: output sinkId=${JSON.stringify(id)} (${id ? "chosen device" : "default output"}) for ${monitorMode()} mode`);
+    } catch (e) {
+      diag(`${label}: setSinkId(${JSON.stringify(id)}) failed ${e && e.name}; using default output`);
+      if (id) { try { await ctx.setSinkId(""); ctx.__sinkId = ""; } catch (_) { /* */ } }
+    }
+  }
+
+  function applyElSink(el) {
+    const id = desiredSinkId();
+    if (id && typeof el.setSinkId === "function") el.setSinkId(id).catch(() => {});
+  }
+
+  function applySinkEverywhere(label) {
+    if (engine.ctx) applySink(engine.ctx, label);
+    for (const el of engine.mediaEls.concat(engine.testEls)) applyElSink(el);
+  }
+
   function diagPermission() {
     if (!navigator.permissions || !navigator.permissions.query) { diag("mic permission: query not available"); return; }
     navigator.permissions.query({ name: "microphone" })
@@ -937,6 +1084,7 @@ input[type="range"] {
     el.src = url;
     el.volume = 1;
     el.muted = false;
+    applyElSink(el);
     engine.testEls.push(el);
     el.addEventListener("playing", () => diag(`${label}: media element playing`), { once: true });
     el.addEventListener("ended", () => { diag(`${label}: media element ended at ${f3(el.currentTime)}s`); URL.revokeObjectURL(url); engine.testEls = engine.testEls.filter((x) => x !== el); }, { once: true });
@@ -1008,7 +1156,7 @@ input[type="range"] {
     let max = 0;
     for (const t of state.tracks) {
       if (!t.buffer) continue;
-      const offset = Math.max(0, (t.latencyOffsetMs || 0) / 1000);
+      const offset = trackOffsetSec(t);
       max = Math.max(max, Math.max(0, t.buffer.duration - offset));
     }
     return max;
@@ -1115,13 +1263,7 @@ input[type="range"] {
     if (ctx.state !== "running") {
       try { await Promise.race([ctx.resume(), new Promise((r) => setTimeout(r, 1500))]); } catch (_) { /* autoplay policy */ }
     }
-    if (fresh && typeof ctx.setSinkId === "function" && !ctx.__sinkSet) {
-      ctx.__sinkSet = true;
-      try {
-        await Promise.race([ctx.setSinkId(""), new Promise((r) => setTimeout(r, 800))]);
-        diag(`${label}: setSinkId("") done (default output)`);
-      } catch (e) { diag(`${label}: setSinkId failed ${e && e.name}`); }
-    }
+    if (fresh || ctx.__sinkId === undefined) await applySink(ctx, label);
     diag(`${label}: ctx state before=${before} after resume=${ctx.state}`);
     return ctx;
   }
@@ -1388,7 +1530,10 @@ input[type="range"] {
     delSend.connect(engine.delayInput);
 
     const dur = track.buffer.duration;
+    // negative offset = start the take later (delay), positive = skip into it
+    const delay = offsetSec < 0 ? -offsetSec : 0;
     const off = Math.min(Math.max(0, offsetSec), Math.max(0, dur - 0.001));
+    when += delay;
     source.start(when, off);
     diag(`  source.start(${f3(when)}, offset ${f3(off)}) for "${track.name}" (now ${f3(ctx.currentTime)}) vol=${f3(vol.gain.value)} mute-gain=${mute.gain.value}`);
     source.onended = () => diag(`  source onended "${track.name}" at ctx ${f3(ctx.currentTime)}`);
@@ -1404,12 +1549,18 @@ input[type="range"] {
     const el = new Audio();
     el.setAttribute("playsinline", "");
     el.preload = "auto";
-    el.__url = URL.createObjectURL(track.blob);
+    const offSec = track.buffer ? trackOffsetSec(track) : 0;
+    if (offSec < 0) when += -offSec;
+    if (offSec > 0) {
+      el.addEventListener("loadedmetadata", () => { try { el.currentTime = offSec; } catch (_) { /* */ } }, { once: true });
+    }
+    el.__url = URL.createObjectURL(mediaBlobFor(track));
     el.__trackId = track.id;
     el.__plain = !!plain;
     el.src = el.__url;
     el.volume = plain ? 1 : Math.min(1, Math.max(0, track.volume));
     el.muted = plain ? false : !isAudible(track);
+    applyElSink(el);
     engine.mediaEls.push(el);
     el.addEventListener("ended", () => diag(`  media element ended "${track.name}"`), { once: true });
     el.addEventListener("error", () => diag(`  media element ERROR "${track.name}" code=${el.error && el.error.code}`), { once: true });
@@ -1437,8 +1588,7 @@ input[type="range"] {
         startMediaElementTrack(track, when);
         continue;
       }
-      const offset = Math.max(0, (track.latencyOffsetMs || 0) / 1000);
-      connectTrackSource(track, when, offset);
+      connectTrackSource(track, when, trackOffsetSec(track));
     }
     state.playStartedAt = when;
   }
@@ -1545,7 +1695,7 @@ input[type="range"] {
       setStatus("Nothing to play yet. Record a take first.");
       return;
     }
-    diag(`--- PLAY tap --- ${state.useMediaPlayer ? "(media player mode)" : "(Web Audio)"}`);
+    diag(`--- PLAY tap --- ${state.useMediaPlayer ? "(media player mode)" : "(Web Audio)"} monitor=${monitorMode()} sinkId=${JSON.stringify(desiredSinkId())}`);
     diag(`userAgent: ${navigator.userAgent}`);
     await unlockContext({ fresh: true, label: "play" });
     stopGraphSources();
@@ -1579,12 +1729,16 @@ input[type="range"] {
   }
 
   const SILENT_PEAK = 0.0015;
-  const RAW_CONSTRAINTS = {
-    echoCancellation: false,
-    noiseSuppression: false,
-    autoGainControl: false,
-    channelCount: { ideal: 1 },
-  };
+  // Speaker: echo cancellation on, so the playback bleeding from the speaker is
+  // reduced in the new take. Earbuds: everything off for the cleanest capture.
+  function micConstraints() {
+    return {
+      echoCancellation: monitorMode() === "speaker",
+      noiseSuppression: false,
+      autoGainControl: false,
+      channelCount: { ideal: 1 },
+    };
+  }
 
   const cap = {
     source: null, proc: null, sink: null,
@@ -1799,7 +1953,8 @@ input[type="range"] {
 
     let stream;
     try {
-      stream = await getMicStream(RAW_CONSTRAINTS);
+      diag(`record: monitor mode=${monitorMode()} sinkId=${JSON.stringify(desiredSinkId())} echoCancellation=${monitorMode() === "speaker"}`);
+      stream = await getMicStream(micConstraints());
     } catch (err) {
       if (err && (err.name === "OverconstrainedError" || err.name === "TypeError")) {
         try { stream = await getMicStream(true); } catch (e2) { err = e2; }
@@ -1814,6 +1969,7 @@ input[type="range"] {
     }
     engine.recStream = stream;
     engine.ctxStale = true;
+    refreshOutputs("mic opened");
     const t0 = stream.getAudioTracks()[0];
     if (t0 && t0.muted) {
       diag("mic track is MUTED right after opening");
@@ -1988,9 +2144,14 @@ input[type="range"] {
       muted: false,
       solo: false,
       latencyOffsetMs: buffer ? state.latencyMs : 0,
+      alignMs: 0,
+      octave: 0,
       reverbSend: 0.35,
       delaySend: 0.2,
     });
+    if (buffer && state.autoAlignNew && state.tracks.length > 1 && peak >= SILENT_PEAK) {
+      alignTracks(state.tracks[state.tracks.length - 1]);
+    }
     renderTracks();
     if (!buffer) {
       setStatus(`Captured Track ${index}. It will play through the basic audio player on this browser.`);
@@ -2068,10 +2229,508 @@ input[type="range"] {
     }
   }
 
+  // ================= Pitch shift (duration-preserving) =================
+  // Phase-vocoder time-stretch by 2^k, then resample by 2^k: pitch moves by k
+  // octaves, length stays identical so layers stay in sync. Runs in a worker.
+  function rrPitchShift(x, ratio, progress) {
+    function fft(re, im, inv) {
+      const n = re.length;
+      for (let i = 1, j = 0; i < n; i++) {
+        let bit = n >> 1;
+        for (; j & bit; bit >>= 1) j ^= bit;
+        j ^= bit;
+        if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
+      }
+      for (let len = 2; len <= n; len <<= 1) {
+        const ang = (2 * Math.PI / len) * (inv ? 1 : -1);
+        const wr = Math.cos(ang), wi = Math.sin(ang), h = len >> 1;
+        for (let i = 0; i < n; i += len) {
+          let cr = 1, ci = 0;
+          for (let k = 0; k < h; k++) {
+            const a = i + k, b = a + h;
+            const xr = re[b] * cr - im[b] * ci, xi = re[b] * ci + im[b] * cr;
+            re[b] = re[a] - xr; im[b] = im[a] - xi; re[a] += xr; im[a] += xi;
+            const ncr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = ncr;
+          }
+        }
+      }
+      if (inv) for (let i = 0; i < n; i++) { re[i] /= n; im[i] /= n; }
+    }
+    const N = 2048;
+    // keep at least 50% overlap on the synthesis side (needed for +2 octaves)
+    const Ha = ratio > 2 ? Math.round(N / 2 / ratio) : 512;
+    const Hs = Math.round(Ha * ratio), r = Hs / Ha;
+    const TWO_PI = 2 * Math.PI;
+    const win = new Float64Array(N);
+    for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos((TWO_PI * i) / N);
+    const xp = new Float32Array(x.length + 2 * N);
+    xp.set(x, N);
+    const frames = Math.floor((xp.length - N) / Ha) + 1;
+    const outLen = (frames - 1) * Hs + N;
+    const y = new Float32Array(outLen);
+    const wsum = new Float32Array(outLen);
+    const half = N / 2 + 1;
+    const prev = new Float64Array(half), acc = new Float64Array(half);
+    const mag = new Float64Array(half), pha = new Float64Array(half), syn = new Float64Array(half);
+    const prevMag = new Float64Array(half), peaks = new Int32Array(half);
+    const re = new Float64Array(N), im = new Float64Array(N);
+    for (let m = 0; m < frames; m++) {
+      const pos = m * Ha;
+      for (let i = 0; i < N; i++) { re[i] = xp[pos + i] * win[i]; im[i] = 0; }
+      fft(re, im, false);
+      // Identity phase locking (Laroche & Dolson): propagate the phase of each
+      // spectral peak, and lock the bins around it to that peak. Keeps the
+      // partials coherent so the shifted voice doesn't sound hollow or lose level.
+      let fmax = 0;
+      for (let k = 0; k < half; k++) {
+        mag[k] = Math.hypot(re[k], im[k]);
+        pha[k] = Math.atan2(im[k], re[k]);
+        if (mag[k] > fmax) fmax = mag[k];
+      }
+      let np = 0;
+      const floorMag = fmax * 1e-4;
+      for (let k = 1; k < half - 1; k++) {
+        if (mag[k] > floorMag && mag[k] > mag[k - 1] && mag[k] >= mag[k + 1]) peaks[np++] = k;
+      }
+      for (let q = 0; q < np; q++) {
+        const k = peaks[q];
+        if (m === 0 || prevMag[k] <= floorMag) {
+          syn[k] = pha[k];
+        } else {
+          const omega = (TWO_PI * k * Ha) / N;
+          let d = pha[k] - prev[k] - omega;
+          d -= TWO_PI * Math.round(d / TWO_PI);
+          syn[k] = acc[k] + (omega + d) * r;
+        }
+      }
+      if (np === 0) {
+        for (let k = 0; k < half; k++) syn[k] = pha[k];
+      } else {
+        let q = 0;
+        for (let k = 0; k < half; k++) {
+          while (q < np - 1 && k > (peaks[q] + peaks[q + 1]) / 2) q++;
+          const pk = peaks[q];
+          if (k !== pk) syn[k] = syn[pk] + (pha[k] - pha[pk]);
+        }
+      }
+      for (let k = 0; k < half; k++) {
+        acc[k] = syn[k];
+        prev[k] = pha[k];
+        prevMag[k] = mag[k];
+        re[k] = mag[k] * Math.cos(syn[k]);
+        im[k] = mag[k] * Math.sin(syn[k]);
+      }
+      for (let k = 1; k < N / 2; k++) { re[N - k] = re[k]; im[N - k] = -im[k]; }
+      fft(re, im, true);
+      const op = m * Hs;
+      for (let i = 0; i < N; i++) { y[op + i] += re[i] * win[i]; wsum[op + i] += win[i] * win[i]; }
+      if (progress && (m & 255) === 0) progress(m / frames);
+    }
+    for (let i = 0; i < outLen; i++) y[i] = wsum[i] > 1e-3 ? y[i] / wsum[i] : 0;
+    // input sample N sits at output N*r; read back at step r -> original length & timing
+    const start = N * r;
+    const out = new Float32Array(x.length);
+    if (r > 1) {
+      // anti-alias low-pass (windowed sinc) evaluated only where we read
+      const taps = 48, fc = 0.5 / r * 0.92;
+      const h = new Float64Array(2 * taps + 1);
+      let hs = 0;
+      for (let j = -taps; j <= taps; j++) {
+        const sinc = j === 0 ? 2 * fc : Math.sin(TWO_PI * fc * j) / (Math.PI * j);
+        const w = 0.42 + 0.5 * Math.cos((Math.PI * j) / taps) + 0.08 * Math.cos((2 * Math.PI * j) / taps);
+        h[j + taps] = sinc * w; hs += h[j + taps];
+      }
+      for (let j = 0; j < h.length; j++) h[j] /= hs;
+      const filt = (c) => {
+        let a = 0;
+        for (let j = -taps; j <= taps; j++) { const idx = c + j; if (idx >= 0 && idx < outLen) a += y[idx] * h[j + taps]; }
+        return a;
+      };
+      for (let i = 0; i < out.length; i++) {
+        const p = start + i * r;
+        const i0 = Math.floor(p), f = p - i0;
+        out[i] = f < 1e-6 ? filt(i0) : filt(i0) * (1 - f) + filt(i0 + 1) * f;
+      }
+    } else {
+      for (let i = 0; i < out.length; i++) {
+        const p = start + i * r;
+        const i0 = Math.floor(p), f = p - i0;
+        const a = i0 < outLen ? y[i0] : 0, b = i0 + 1 < outLen ? y[i0 + 1] : 0;
+        out[i] = a + (b - a) * f;
+      }
+    }
+    return out;
+  }
+
+  let pitchWorker = null;
+  let pitchJobs = new Map();
+  let pitchJobId = 0;
+  function getPitchWorker() {
+    if (pitchWorker !== null) return pitchWorker;
+    try {
+      const src = `const rrPitchShift = ${rrPitchShift.toString()};
+self.onmessage = (e) => {
+  const { id, data, ratio } = e.data;
+  const out = rrPitchShift(data, ratio, (p) => self.postMessage({ id, progress: p }));
+  self.postMessage({ id, out }, [out.buffer]);
+};`;
+      pitchWorker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+      pitchWorker.onmessage = (e) => {
+        const job = pitchJobs.get(e.data.id);
+        if (!job) return;
+        if (e.data.out) { pitchJobs.delete(e.data.id); job.resolve(e.data.out); }
+        else if (job.onProgress) job.onProgress(e.data.progress);
+      };
+      pitchWorker.onerror = (e) => {
+        diag(`pitch worker error: ${e.message || "unknown"}; using the main thread`);
+        pitchWorker = false;
+        for (const [, job] of pitchJobs) job.fallback();
+        pitchJobs = new Map();
+      };
+    } catch (e) {
+      diag(`pitch worker unavailable (${e && e.name}); using the main thread`);
+      pitchWorker = false;
+    }
+    return pitchWorker;
+  }
+
+  function shiftSamples(mono, octaves, onProgress) {
+    const ratio = Math.pow(2, octaves);
+    const runMain = () => new Promise((res) => setTimeout(() => res(rrPitchShift(mono, ratio)), 0));
+    const w = getPitchWorker();
+    if (!w) return runMain();
+    return new Promise((resolve) => {
+      const id = ++pitchJobId;
+      const copy = new Float32Array(mono);
+      pitchJobs.set(id, { resolve, onProgress, fallback: () => runMain().then(resolve) });
+      w.postMessage({ id, data: copy, ratio }, [copy.buffer]);
+    });
+  }
+
+  function monoOf(buffer) {
+    if (buffer.numberOfChannels === 1) return buffer.getChannelData(0);
+    const out = new Float32Array(buffer.length);
+    for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+      const d = buffer.getChannelData(ch);
+      for (let i = 0; i < d.length; i++) out[i] += d[i] / buffer.numberOfChannels;
+    }
+    return out;
+  }
+
+  function makeBuffer(samples, sampleRate) {
+    let b;
+    try { b = new AudioBuffer({ length: Math.max(1, samples.length), numberOfChannels: 1, sampleRate }); }
+    catch (_) { b = engine.ctx.createBuffer(1, Math.max(1, samples.length), sampleRate); }
+    b.copyToChannel(samples, 0);
+    return b;
+  }
+
+  function baseBufferOf(t) { return t.baseBuffer || t.buffer; }
+
+  async function renderShifted(track, octaves) {
+    const base = baseBufferOf(track);
+    if (!track.shiftCache) track.shiftCache = {};
+    if (track.shiftCache[octaves]) return track.shiftCache[octaves];
+    const t0 = performance.now();
+    const out = await shiftSamples(monoOf(base), octaves, (p) => {
+      track.busyText = `processing… ${Math.round(p * 100)}%`;
+      const el = ui.trackList.querySelector(`.track[data-id="${track.id}"] .oct-busy`);
+      if (el) el.textContent = track.busyText;
+    });
+    const buf = makeBuffer(out, base.sampleRate);
+    track.shiftCache[octaves] = buf;
+    diag(`pitch: "${track.name}" ${octaves > 0 ? "+" : ""}${octaves} oct rendered in ${Math.round(performance.now() - t0)} ms (${buf.duration.toFixed(2)}s, same length ${buf.length === base.length})`);
+    return buf;
+  }
+
+  async function setOctave(track, octaves) {
+    const k = Math.max(-2, Math.min(2, Math.round(octaves)));
+    if (!baseBufferOf(track)) return;
+    if (!track.baseBuffer) track.baseBuffer = track.buffer;
+    track.octave = k;
+    track.wavCache = null;
+    if (k === 0) {
+      track.buffer = track.baseBuffer;
+      track.busy = false;
+      renderTracks();
+      persistAfterEdit("octave");
+      return;
+    }
+    track.busy = true;
+    track.busyText = "processing…";
+    renderTracks();
+    try {
+      const buf = await renderShifted(track, k);
+      if (track.octave === k) track.buffer = buf;
+    } catch (e) {
+      diag(`pitch failed: ${e && e.name} ${e && e.message}`);
+      track.octave = 0;
+      track.buffer = track.baseBuffer;
+      setStatus("Could not shift that take.");
+    }
+    track.busy = false;
+    renderTracks();
+    if (state.transport === "playing") setStatus("Octave change applies the next time you tap Play.", "is-playing");
+    persistAfterEdit("octave");
+  }
+
+  async function duplicateShifted(track, dir) {
+    const target = (track.octave || 0) + dir;
+    if (target < -2 || target > 2 || !baseBufferOf(track)) return;
+    if (!track.baseBuffer) track.baseBuffer = track.buffer;
+    track.busy = true;
+    track.busyText = "making copy…";
+    renderTracks();
+    try {
+      const buf = await renderShifted(track, target);
+      const idx = state.tracks.indexOf(track);
+      const rel = dir > 0 ? "+1 oct" : "−1 oct";
+      const copy = {
+        id: uid(),
+        name: `${track.name} (${rel})`.slice(0, 60),
+        blob: makeWavBlob(buf.getChannelData(0), buf.sampleRate),
+        buffer: buf,
+        baseBuffer: buf,
+        peak: bufferPeak(buf),
+        mimeType: "audio/wav",
+        volume: Math.round((track.volume || 1) * 0.8 * 100) / 100,
+        muted: false,
+        solo: false,
+        octave: 0,
+        alignMs: track.alignMs || 0,
+        latencyOffsetMs: track.latencyOffsetMs || 0,
+        reverbSend: track.reverbSend,
+        delaySend: track.delaySend,
+      };
+      state.tracks.splice(idx + 1, 0, copy);
+      diag(`duplicated "${track.name}" as "${copy.name}" (${target > 0 ? "+" : ""}${target} oct from the original, align ${copy.alignMs} ms)`);
+      setStatus(`Added “${copy.name}”.`);
+      persistAfterEdit("duplicate");
+    } catch (e) {
+      diag(`duplicate failed: ${e && e.name} ${e && e.message}`);
+      setStatus("Could not make the octave copy.");
+    }
+    track.busy = false;
+    renderTracks();
+  }
+
+  // Media-player fallback plays the shifted audio too (rendered to WAV).
+  function mediaBlobFor(track) {
+    if (track.octave && track.buffer) {
+      if (!track.wavCache) track.wavCache = makeWavBlob(monoOf(track.buffer), track.buffer.sampleRate);
+      return track.wavCache;
+    }
+    return track.blob;
+  }
+
+  // ================= Auto-align =================
+  // Total start offset in seconds: positive skips into the take (plays earlier),
+  // negative delays it. Non-destructive: the PCM is never trimmed.
+  function trackOffsetSec(t) {
+    return ((t.latencyOffsetMs || 0) + (t.alignMs || 0)) / 1000;
+  }
+
+  function detectOnset(buffer) {
+    if (!buffer) return null;
+    const x = monoOf(buffer);
+    const sr = buffer.sampleRate;
+    const W = Math.max(8, Math.round(sr * 0.005));
+    const hop = Math.max(1, Math.round(sr * 0.001));
+    const n = Math.min(x.length, Math.round(sr * 60));
+    const cs = new Float64Array(n + 1);
+    for (let i = 0; i < n; i++) cs[i + 1] = cs[i] + x[i] * x[i];
+    const rms = [];
+    for (let i = 0; i + W <= n; i += hop) rms.push(Math.sqrt((cs[i + W] - cs[i]) / W));
+    if (!rms.length) return null;
+    const sorted = rms.slice().sort((a, b) => a - b);
+    const floor = sorted[Math.floor(sorted.length * 0.1)];
+    const maxR = sorted[sorted.length - 1];
+    if (maxR < 0.002) return null;
+    let thr = Math.max(0.01, 4 * floor);
+    if (thr > maxR * 0.5) thr = maxR * 0.5;
+    let idx = rms.findIndex((v) => v > thr);
+    if (idx < 0) return null;
+    // refine to the first sample above the threshold inside the window
+    let s0 = idx * hop;
+    const lim = Math.min(n, s0 + W);
+    for (let i = Math.max(0, s0 - W); i < lim; i++) {
+      if (Math.abs(x[i]) > thr) { s0 = i; break; }
+    }
+    return { sec: s0 / sr, floor, thr };
+  }
+
+  // Optional refinement: normalized cross-correlation of the first ~2 s,
+  // used only if it is confident and agrees with the onset estimate.
+  function xcorrLag(refBuf, refOn, buf, on, maxLagSec) {
+    const dec = 4;
+    const srD = refBuf.sampleRate / dec;
+    const pick = (b, startSec) => {
+      const x = monoOf(b);
+      const st = Math.max(0, Math.round((startSec - 0.1) * b.sampleRate));
+      const len = Math.round(2 * srD);
+      const out = new Float32Array(len);
+      for (let i = 0; i < len; i++) {
+        let a = 0;
+        for (let j = 0; j < dec; j++) a += x[st + i * dec + j] || 0;
+        out[i] = a / dec;
+      }
+      return out;
+    };
+    const a = pick(refBuf, refOn), b = pick(buf, on);
+    const maxLag = Math.round(maxLagSec * srD);
+    let best = -1, bestLag = 0;
+    let ea = 0; for (let i = 0; i < a.length; i++) ea += a[i] * a[i];
+    for (let lag = -maxLag; lag <= maxLag; lag++) {
+      let s = 0, eb = 0;
+      for (let i = 0; i < a.length; i++) {
+        const j = i + lag;
+        if (j < 0 || j >= b.length) continue;
+        s += a[i] * b[j]; eb += b[j] * b[j];
+      }
+      const c = eb > 0 && ea > 0 ? s / Math.sqrt(ea * eb) : 0;
+      if (c > best) { best = c; bestLag = lag; }
+    }
+    return { lagSec: bestLag / srD, conf: best };
+  }
+
+  function alignTracks(onlyTrack) {
+    const withOnset = state.tracks.map((t) => ({ t, on: detectOnset(baseBufferOf(t)) }));
+    const ref = withOnset.find((x) => x.on);
+    if (!ref) { setStatus("No clear vocal start found to align to."); return 0; }
+    const refTimeline = ref.on.sec - trackOffsetSec(ref.t);
+    let changed = 0;
+    for (const { t, on } of withOnset) {
+      if (t === ref.t || !on) continue;
+      if (onlyTrack && t !== onlyTrack) continue;
+      let alignSec = on.sec - (t.latencyOffsetMs || 0) / 1000 - refTimeline;
+      let how = "onset";
+      try {
+        const xc = xcorrLag(baseBufferOf(ref.t), ref.on.sec, baseBufferOf(t), on.sec, 0.06);
+        if (xc.conf > 0.8 && Math.abs(xc.lagSec) <= 0.05) { alignSec += xc.lagSec; how = `onset+xcorr (conf ${xc.conf.toFixed(2)})`; }
+      } catch (_) { /* onset only */ }
+      const ms = Math.max(-3000, Math.min(3000, Math.round(alignSec * 1000)));
+      diag(`align "${t.name}": onset ${(on.sec * 1000).toFixed(0)} ms vs ref "${ref.t.name}" ${(ref.on.sec * 1000).toFixed(0)} ms -> shift ${fmtShift(ms)} (${how})`);
+      t.alignMs = ms;
+      changed++;
+    }
+    return changed;
+  }
+
+  function fmtShift(alignMs) {
+    const v = -Math.round(alignMs || 0);
+    if (v === 0) return "0 ms";
+    return `${v > 0 ? "+" : "−"}${Math.abs(v)} ms`;
+  }
+
+  function escapeAttr(v) {
+    return String(v).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  }
+
+  // Default names ("Track N") follow the track's position; custom names are kept.
+  function relabelTracks() {
+    state.tracks.forEach((t, i) => {
+      if (/^Track \d+$/.test(t.name)) t.name = `Track ${i + 1}`;
+    });
+  }
+
+  function silenceTrackPlayback(id) {
+    const nodes = engine.trackNodes.get(id);
+    if (nodes) {
+      const ctx = engine.ctx;
+      try {
+        // short fade avoids a click, then stop and disconnect
+        nodes.mute.gain.setTargetAtTime(0, ctx.currentTime, 0.008);
+        nodes.source.stop(ctx.currentTime + 0.04);
+      } catch (_) { try { nodes.source.stop(); } catch (_) { /* */ } }
+      setTimeout(() => {
+        for (const n of [nodes.source, nodes.vol, nodes.mute, nodes.revSend, nodes.delSend]) {
+          try { n.disconnect(); } catch (_) { /* */ }
+        }
+      }, 80);
+      engine.sources = engine.sources.filter((s) => s !== nodes.source);
+      engine.trackNodes.delete(id);
+    }
+    engine.mediaEls = engine.mediaEls.filter((m) => {
+      if (m.__trackId !== id) return true;
+      try { m.pause(); } catch (_) { /* */ }
+      if (m.__url) URL.revokeObjectURL(m.__url);
+      return false;
+    });
+  }
+
+  let undoState = null;
+  let toastTimer = 0;
+
+  function hideToast() {
+    clearTimeout(toastTimer);
+    ui.toast.hidden = true;
+  }
+
+  async function persistAfterEdit(what) {
+    if (!state.currentSessionId) return;
+    try {
+      const rec = await getSession(state.currentSessionId);
+      if (!rec) return;
+      rec.tracks = await serializeTracks();
+      rec.savedAt = Date.now();
+      await putSession(rec);
+      await renderSessions();
+      diag(`session "${rec.name}" updated on this device (${what})`);
+    } catch (e) {
+      diag(`could not update the saved session: ${e && e.name}`);
+    }
+  }
+
+  function deleteTrack(id) {
+    const index = state.tracks.findIndex((t) => t.id === id);
+    if (index < 0) return;
+    const track = state.tracks[index];
+    silenceTrackPlayback(id);
+    state.tracks.splice(index, 1);
+    const oldName = track.name;
+    relabelTracks();
+    renderTracks();
+    refreshAllLiveGains(); // a deleted solo track must stop muting the others
+    undoState = { track, index, oldName };
+    diag(`deleted "${oldName}" (was #${index + 1}); ${state.tracks.length} track(s) left`);
+    ui.toastText.textContent = `Deleted “${oldName}”.`;
+    ui.toast.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { hideToast(); undoState = null; }, 5000);
+    persistAfterEdit("take deleted");
+  }
+
+  function undoDelete() {
+    if (!undoState) return;
+    const { track, index, oldName } = undoState;
+    undoState = null;
+    hideToast();
+    track.name = oldName;
+    state.tracks.splice(Math.min(index, state.tracks.length), 0, track);
+    relabelTracks();
+    renderTracks();
+    refreshAllLiveGains();
+    if (state.transport === "playing" && track.buffer && !state.useMediaPlayer && engine.ctx) {
+      // rejoin the running playback at the current position
+      const pos = engine.ctx.currentTime - state.playStartedAt + trackOffsetSec(track);
+      if (pos < track.buffer.duration) connectTrackSource(track, engine.ctx.currentTime + 0.01, pos);
+    }
+    setStatus(`Restored “${track.name}”.`);
+    diag(`undo: restored "${track.name}" at #${index + 1}`);
+    persistAfterEdit("delete undone");
+  }
+
+  function octLabel(k) {
+    k = k || 0;
+    if (k === 0) return "0";
+    return `${k > 0 ? "+" : "−"}${Math.abs(k)} oct`;
+  }
+
   function renderTracks() {
     ui.trackList.innerHTML = "";
     ui.emptyTracks.hidden = state.tracks.length > 0;
     state.tracks.forEach((track) => {
+      const canShift = !!baseBufferOf(track) && !track.busy;
       const el = document.createElement("article");
       el.className = "track";
       el.dataset.id = track.id;
@@ -2081,9 +2740,31 @@ input[type="range"] {
           <button type="button" class="btn btn-tiny btn-mute ${track.muted ? "is-on" : ""}" aria-pressed="${track.muted}">M</button>
           <button type="button" class="btn btn-tiny btn-solo ${track.solo ? "is-solo" : ""}" aria-pressed="${track.solo}">S</button>
           <button type="button" class="btn btn-tiny btn-media" title="Play this take through the phone’s media player">▶ Media</button>
-          <button type="button" class="btn btn-tiny danger btn-del" title="Delete track">Delete</button>
+          <button type="button" class="btn btn-tiny danger btn-del" title="Delete this take" aria-label="Delete ${escapeAttr(track.name)}">🗑</button>
         </div>
         <canvas class="wave" aria-hidden="true"></canvas>
+        <div class="track-tools">
+          <span class="tool-group">
+            <span>Octave</span>
+            <button type="button" class="btn btn-tiny oct-down" ${canShift && (track.octave || 0) > -2 ? "" : "disabled"}>8va ↓</button>
+            <em class="oct-label">${octLabel(track.octave)}</em>
+            <button type="button" class="btn btn-tiny oct-up" ${canShift && (track.octave || 0) < 2 ? "" : "disabled"}>8va ↑</button>
+            <button type="button" class="btn btn-tiny oct-reset" ${canShift && track.octave ? "" : "disabled"} title="Back to the original pitch">0</button>
+            <span class="oct-busy busy" ${track.busy ? "" : "hidden"}>${track.busyText || "processing…"}</span>
+          </span>
+          <span class="tool-group">
+            <span>Copy</span>
+            <button type="button" class="btn btn-tiny dup-up" ${canShift && (track.octave || 0) < 2 ? "" : "disabled"} title="New track one octave up">Duplicate +8va</button>
+            <button type="button" class="btn btn-tiny dup-down" ${canShift && (track.octave || 0) > -2 ? "" : "disabled"} title="New track one octave down">Duplicate −8va</button>
+          </span>
+          <span class="tool-group">
+            <span>Start</span>
+            <button type="button" class="btn btn-tiny al-minus" title="Move 10 ms earlier">−10</button>
+            <em class="al-label">${fmtShift(track.alignMs)}</em>
+            <button type="button" class="btn btn-tiny al-plus" title="Move 10 ms later">+10</button>
+            <button type="button" class="btn btn-tiny al-reset" ${track.alignMs ? "" : "disabled"}>Reset</button>
+          </span>
+        </div>
         <div class="track-sliders">
           <label class="field">
             <span>Volume <em>${Math.round(track.volume * 100)}%</em></span>
@@ -2116,19 +2797,23 @@ input[type="range"] {
       });
       el.querySelector(".btn-media").addEventListener("click", () => {
         diag(`--- MEDIA PLAYER tap "${track.name}" --- blob ${track.blob ? `${track.blob.type} ${track.blob.size}B` : "none"}`);
-        if (track.blob) playBlobPlain(track.blob, `media "${track.name}"`);
+        if (track.blob) playBlobPlain(mediaBlobFor(track), `media "${track.name}"`);
       });
-      el.querySelector(".btn-del").addEventListener("click", () => {
-        if (!confirm(`Delete “${track.name}”?`)) return;
-        const nodes = engine.trackNodes.get(track.id);
-        if (nodes && nodes.source) {
-          try { nodes.source.stop(); } catch (_) { /* */ }
-        }
-        engine.trackNodes.delete(track.id);
-        for (const m of engine.mediaEls) if (m.__trackId === track.id) { try { m.pause(); } catch (_) { /* */ } }
-        state.tracks = state.tracks.filter((t) => t.id !== track.id);
+      el.querySelector(".btn-del").addEventListener("click", () => deleteTrack(track.id));
+      el.querySelector(".oct-up").addEventListener("click", () => setOctave(track, (track.octave || 0) + 1));
+      el.querySelector(".oct-down").addEventListener("click", () => setOctave(track, (track.octave || 0) - 1));
+      el.querySelector(".oct-reset").addEventListener("click", () => setOctave(track, 0));
+      el.querySelector(".dup-up").addEventListener("click", () => duplicateShifted(track, 1));
+      el.querySelector(".dup-down").addEventListener("click", () => duplicateShifted(track, -1));
+      const nudge = (deltaShift) => {
+        track.alignMs = Math.max(-3000, Math.min(3000, (track.alignMs || 0) - deltaShift));
         renderTracks();
-      });
+        if (state.transport === "playing") setStatus("Timing change applies the next time you tap Play.", "is-playing");
+        persistAfterEdit("timing");
+      };
+      el.querySelector(".al-minus").addEventListener("click", () => nudge(-10));
+      el.querySelector(".al-plus").addEventListener("click", () => nudge(10));
+      el.querySelector(".al-reset").addEventListener("click", () => { track.alignMs = 0; renderTracks(); persistAfterEdit("timing"); });
       const bindSlider = (sel, key, labelSuffix) => {
         const input = el.querySelector(sel);
         const label = input.previousElementSibling.querySelector("em");
@@ -2238,6 +2923,8 @@ input[type="range"] {
         muted: t.muted,
         solo: t.solo,
         latencyOffsetMs: t.latencyOffsetMs,
+        alignMs: t.alignMs || 0,
+        octave: t.octave || 0,
         reverbSend: t.reverbSend,
         delaySend: t.delaySend,
         mimeType: t.mimeType,
@@ -2264,11 +2951,30 @@ input[type="range"] {
         muted: !!row.muted,
         solo: !!row.solo,
         latencyOffsetMs: Number.isFinite(row.latencyOffsetMs) ? row.latencyOffsetMs : 0,
+        alignMs: Number.isFinite(row.alignMs) ? row.alignMs : 0,
+        octave: 0,
+        pendingOctave: Number.isFinite(row.octave) && buffer ? Math.max(-2, Math.min(2, Math.round(row.octave))) : 0,
         reverbSend: Number.isFinite(row.reverbSend) ? row.reverbSend : 0.35,
         delaySend: Number.isFinite(row.delaySend) ? row.delaySend : 0.2,
       });
     }
     return out;
+  }
+
+  function restoreOctaves() {
+    for (const t of state.tracks) {
+      const k = t.pendingOctave;
+      delete t.pendingOctave;
+      if (k) {
+        t.baseBuffer = t.buffer;
+        t.octave = k;
+        t.busy = true;
+        t.busyText = "processing…";
+        renderShifted(t, k).then((buf) => {
+          if (t.octave === k) t.buffer = buf;
+        }).catch(() => { t.octave = 0; }).finally(() => { t.busy = false; renderTracks(); });
+      }
+    }
   }
 
   function applyFxFrom(data) {
@@ -2338,6 +3044,7 @@ input[type="range"] {
       return;
     }
     state.tracks = await tracksFromSerialized(rec.tracks);
+    restoreOctaves();
     state.currentSessionId = rec.id;
     ui.sessionName.value = rec.name || "";
     applyFxFrom(rec);
@@ -2443,6 +3150,7 @@ input[type="range"] {
     if (state.transport !== "stopped") stopAll();
     try {
       state.tracks = await tracksFromSerialized(data.tracks);
+      restoreOctaves();
     } catch (err) {
       throw new Error("The session JSON opened, but the audio takes could not be decoded.");
     }
@@ -2543,6 +3251,9 @@ input[type="range"] {
         muted: t.muted,
         solo: t.solo,
         latencyOffsetMs: t.latencyOffsetMs,
+        alignMs: t.alignMs || 0,
+        octave: t.octave || 0,
+        busy: !!t.busy,
         reverbSend: t.reverbSend,
         delaySend: t.delaySend,
         mimeType: t.mimeType,
@@ -2605,6 +3316,21 @@ input[type="range"] {
       diag(`media tone: WAV ${blob.size} bytes, volume 1, not muted`);
       playBlobPlain(blob, "media tone");
     });
+    ui.toastUndo.addEventListener("click", undoDelete);
+    ui.alignBtn.addEventListener("click", () => {
+      const n = alignTracks(null);
+      renderTracks();
+      if (n) { setStatus(`Aligned ${n} take${n === 1 ? "" : "s"} to ${state.tracks[0] ? `“${state.tracks[0].name}”` : "the first take"}.`); persistAfterEdit("auto-align"); }
+    });
+    ui.autoAlignNew.addEventListener("change", () => {
+      state.autoAlignNew = ui.autoAlignNew.checked;
+      lsSet("revamped-reverb.autoAlignNew", state.autoAlignNew ? "1" : "0");
+    });
+    ui.monSpeaker.addEventListener("click", () => setMonitorMode("speaker", true));
+    ui.monEarbuds.addEventListener("click", () => setMonitorMode("earbuds", true));
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      navigator.mediaDevices.addEventListener("devicechange", () => refreshOutputs("devicechange"));
+    }
     ui.useMediaPlayer.addEventListener("change", () => {
       state.useMediaPlayer = ui.useMediaPlayer.checked;
       diag(`media player mode ${state.useMediaPlayer ? "ON" : "OFF"}`);
@@ -2727,6 +3453,12 @@ input[type="range"] {
     }
     setStatus("Ready");
     diag(`page loaded. userAgent: ${navigator.userAgent}`);
+    state.monitorMode = lsGet(MON_KEY) === "earbuds" ? "earbuds" : "speaker";
+    state.autoAlignNew = lsGet("revamped-reverb.autoAlignNew") !== "0";
+    ui.autoAlignNew.checked = state.autoAlignNew;
+    renderMonitor();
+    diag(`monitor mode: ${state.monitorMode} (${lsGet(MON_USER_KEY) === "1" ? "your saved choice" : "default"})`);
+    refreshOutputs("page load");
     diag(`secure context: ${window.isSecureContext}; AudioContext: ${!!(window.AudioContext || window.webkitAudioContext)}; MediaRecorder: ${typeof MediaRecorder !== "undefined"}; setSinkId on AudioContext: ${!!(window.AudioContext && AudioContext.prototype.setSinkId)}`);
     window.__revampedReverbTest = {
       snapshot: snapshotForTest,
@@ -2739,6 +3471,15 @@ input[type="range"] {
           ...fxSnapshot(),
         };
       },
+      pitchShift(samples, octaves) { return shiftSamples(new Float32Array(samples), octaves); },
+      detectOnset(samples, sampleRate) { return detectOnset(makeBuffer(new Float32Array(samples), sampleRate)); },
+      addTrackFromSamples(samples, sampleRate, name) {
+        const buf = makeBuffer(new Float32Array(samples), sampleRate);
+        state.tracks.push({ id: uid(), name: name || `Track ${state.tracks.length + 1}`, blob: makeWavBlob(buf.getChannelData(0), sampleRate), buffer: buf, peak: bufferPeak(buf), mimeType: "audio/wav", volume: 1, muted: false, solo: false, latencyOffsetMs: 0, alignMs: 0, octave: 0, reverbSend: 0, delaySend: 0 });
+        renderTracks();
+      },
+      alignAll() { const n = alignTracks(null); renderTracks(); return n; },
+      trackBuffer(i) { const b = state.tracks[i] && state.tracks[i].buffer; return b ? Array.from(b.getChannelData(0)) : null; },
       async importPayload(data) {
         await applySessionData(data, "Imported session");
         return snapshotForTest();
