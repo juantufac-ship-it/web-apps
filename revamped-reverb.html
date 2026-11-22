@@ -121,6 +121,49 @@ body {
   background: linear-gradient(90deg, #6fae6a, #c9a06a 70%, #d8644f);
   transition: width 60ms linear;
 }
+.diag summary {
+  cursor: pointer;
+  font-weight: 700;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.diag-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+.diag-buttons .btn { flex: 1 1 140px; min-height: 44px; }
+.diag-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  font-size: 14px;
+}
+.diag-toggle input { width: 22px; height: 22px; }
+.diag-log {
+  background: #0f0e0c;
+  color: #d8d2c4;
+  border-radius: 8px;
+  padding: 8px;
+  font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 340px;
+  overflow: auto;
+  margin: 0;
+}
+.mic-alert {
+  background: #4a1f1a;
+  border: 1px solid #d8644f;
+  color: #ffd9d0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 0 0 12px;
+  font-weight: 600;
+}
 .meter-label {
   font-size: 12px;
   color: var(--muted);
@@ -580,6 +623,7 @@ input[type="range"] {
     <p id="status" class="status" aria-live="polite">Ready</p>
     <p class="meter-label" id="meter-label">Output level</p>
     <div class="meter" aria-hidden="true"><div id="meter-fill" class="meter-fill"></div></div>
+    <p id="mic-alert" class="mic-alert" role="alert" hidden></p>
 
     <section class="panel transport" aria-label="Transport">
       <div class="clock-row">
@@ -613,6 +657,18 @@ input[type="range"] {
         </label>
       </div>
     </section>
+
+    <details id="diag-panel" class="panel diag" open>
+      <summary>Diagnostics</summary>
+      <div class="diag-buttons">
+        <button type="button" id="btn-test-tone" class="btn">Test tone</button>
+        <button type="button" id="btn-test-tone-media" class="btn">Test tone (media player)</button>
+        <button type="button" id="btn-diag-copy" class="btn">Copy</button>
+        <button type="button" id="btn-diag-clear" class="btn">Clear</button>
+      </div>
+      <label class="diag-toggle"><input type="checkbox" id="use-media-player"> Play through media player (skip Web Audio)</label>
+      <pre id="diag-log" class="diag-log" aria-live="off"></pre>
+    </details>
 
     <section class="panel effects" aria-label="Effects">
       <div class="fx" id="reverb-panel">
@@ -736,6 +792,13 @@ input[type="range"] {
     dropOverlay: $("drop-overlay"),
     meterFill: $("meter-fill"),
     meterLabel: $("meter-label"),
+    micAlert: $("mic-alert"),
+    diagLog: $("diag-log"),
+    diagCopy: $("btn-diag-copy"),
+    diagClear: $("btn-diag-clear"),
+    testTone: $("btn-test-tone"),
+    testToneMedia: $("btn-test-tone-media"),
+    useMediaPlayer: $("use-media-player"),
   };
 
   const state = {
@@ -749,6 +812,7 @@ input[type="range"] {
     bpm: 120,
     reverb: { enabled: true, mix: 0.25, decay: 2.0 },
     delay: { enabled: false, time: 0.28, feedback: 0.3, mix: 0.2 },
+    useMediaPlayer: false,
   };
 
   const engine = {
@@ -781,7 +845,122 @@ input[type="range"] {
     // AudioContext created before that can stay stuck on a silent/earpiece
     // output. We rebuild the context on the next Play tap.
     ctxStale: false,
+    peakSeen: 0,
+    testEls: [],
   };
+
+  // ---------- on-screen diagnostics ----------
+  const diagLines = [];
+  function diag(msg) {
+    const d = new Date();
+    const ts = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}.${String(d.getMilliseconds()).padStart(3, "0")}`;
+    diagLines.push(`${ts} ${msg}`);
+    if (diagLines.length > 500) diagLines.splice(0, diagLines.length - 500);
+    if (ui.diagLog) {
+      ui.diagLog.textContent = diagLines.join("\n");
+      ui.diagLog.scrollTop = ui.diagLog.scrollHeight;
+    }
+  }
+  const f3 = (n) => (typeof n === "number" && isFinite(n) ? n.toFixed(3) : String(n));
+
+  function diagContext(label) {
+    const ctx = engine.ctx;
+    if (!ctx) { diag(`${label}: no AudioContext`); return; }
+    const d = ctx.destination;
+    diag(`${label}: ctx state=${ctx.state} sampleRate=${ctx.sampleRate} baseLatency=${f3(ctx.baseLatency)} outputLatency=${f3(ctx.outputLatency)} currentTime=${f3(ctx.currentTime)} dest maxChannelCount=${d.maxChannelCount} channelCount=${d.channelCount}`);
+    const t0 = ctx.currentTime;
+    setTimeout(() => {
+      if (engine.ctx !== ctx) return;
+      const t1 = ctx.currentTime;
+      if (t1 > t0 + 0.2) {
+        diag(`${label}: +500ms currentTime=${f3(t1)} ADVANCING (audio clock running) state=${ctx.state}`);
+        return;
+      }
+      diag(`${label}: +500ms currentTime=${f3(t1)} not advancing yet, state=${ctx.state}; checking again`);
+      setTimeout(() => {
+        if (engine.ctx !== ctx) return;
+        const t2 = ctx.currentTime;
+        diag(`${label}: +1500ms currentTime=${f3(t2)} ${t2 > t0 + 0.5 ? "ADVANCING (started late)" : "NOT ADVANCING (audio output is stuck)"} state=${ctx.state}`);
+      }, 1000);
+    }, 500);
+  }
+
+  function diagDevices() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) { diag("enumerateDevices: not available"); return; }
+    navigator.mediaDevices.enumerateDevices().then((list) => {
+      const outs = list.filter((x) => x.kind === "audiooutput");
+      const ins = list.filter((x) => x.kind === "audioinput");
+      diag(`audio outputs (${outs.length}): ${outs.map((x) => `"${x.label || "(no label)"}" ${x.deviceId.slice(0, 10)}`).join(" | ") || "none listed"}`);
+      diag(`audio inputs (${ins.length}): ${ins.map((x) => `"${x.label || "(no label)"}"`).join(" | ") || "none listed"}`);
+    }).catch((e) => diag(`enumerateDevices failed: ${e.name}`));
+  }
+
+  function diagPermission() {
+    if (!navigator.permissions || !navigator.permissions.query) { diag("mic permission: query not available"); return; }
+    navigator.permissions.query({ name: "microphone" })
+      .then((st) => diag(`mic permission: ${st.state}`))
+      .catch((e) => diag(`mic permission: query failed (${e.name})`));
+  }
+
+  function diagTracks() {
+    if (!state.tracks.length) { diag("tracks: none"); return; }
+    const solo = state.tracks.some((t) => t.solo);
+    state.tracks.forEach((t, i) => {
+      const b = t.buffer;
+      if (b && t.peak === undefined) t.peak = bufferPeak(b);
+      diag(`track ${i + 1} "${t.name}": ${b ? `dur=${b.duration.toFixed(2)}s ch=${b.numberOfChannels} rate=${b.sampleRate} len=${b.length} peak=${f3(t.peak)}` : "NO decoded buffer (media-player fallback)"} blob=${t.blob ? `${t.blob.type} ${t.blob.size}B` : "none"} vol=${t.volume} muted=${t.muted} solo=${t.solo} audible=${!t.muted && (!solo || t.solo)}`);
+    });
+  }
+
+  function makeWavBlob(samples, sampleRate) {
+    const n = samples.length;
+    const buf = new ArrayBuffer(44 + n * 2);
+    const v = new DataView(buf);
+    const w = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
+    w(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); w(8, "WAVE");
+    w(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    w(36, "data"); v.setUint32(40, n * 2, true);
+    for (let i = 0; i < n; i++) {
+      const x = Math.max(-1, Math.min(1, samples[i]));
+      v.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7fff, true);
+    }
+    return new Blob([buf], { type: "audio/wav" });
+  }
+
+  // Plays a blob through a plain <audio> element (not Web Audio), volume 1.
+  function playBlobPlain(blob, label) {
+    const el = new Audio();
+    el.setAttribute("playsinline", "");
+    el.preload = "auto";
+    const url = URL.createObjectURL(blob);
+    el.src = url;
+    el.volume = 1;
+    el.muted = false;
+    engine.testEls.push(el);
+    el.addEventListener("playing", () => diag(`${label}: media element playing`), { once: true });
+    el.addEventListener("ended", () => { diag(`${label}: media element ended at ${f3(el.currentTime)}s`); URL.revokeObjectURL(url); engine.testEls = engine.testEls.filter((x) => x !== el); }, { once: true });
+    el.addEventListener("error", () => diag(`${label}: media element ERROR code=${el.error && el.error.code}`), { once: true });
+    const p = el.play();
+    if (p && p.then) {
+      p.then(() => diag(`${label}: play() resolved`), (e) => diag(`${label}: play() REJECTED ${e && e.name}`));
+    }
+    return el;
+  }
+
+  function measurePeakFor(ms, label) {
+    engine.peakSeen = 0;
+    const ctx = engine.ctx;
+    const an = engine.meter;
+    if (!ctx || !an) return;
+    const buf = new Float32Array(an.fftSize);
+    let max = 0;
+    const iv = setInterval(() => {
+      an.getFloatTimeDomainData(buf);
+      for (let i = 0; i < buf.length; i++) { const x = Math.abs(buf[i]); if (x > max) max = x; }
+    }, 25);
+    setTimeout(() => { clearInterval(iv); diag(`${label}: analyser peak at output = ${f3(max)} ${max > 0.001 ? "(signal reaches the speakers' input)" : "(SILENT at output)"}`); }, ms);
+  }
 
   let irTimer = 0;
   let dbPromise = null;
@@ -915,13 +1094,25 @@ input[type="range"] {
   // resuming the AudioContext counts as a user gesture.
   async function unlockContext(opts) {
     const fresh = opts && opts.fresh;
-    if (engine.ctx && (engine.ctx.state === "closed" || (fresh && engine.ctxStale && state.transport === "stopped"))) {
+    const label = (opts && opts.label) || "unlock";
+    const before = engine.ctx ? engine.ctx.state : "none";
+    if (engine.ctx && (engine.ctx.state === "closed" ||
+        (fresh && state.transport === "stopped" && (engine.ctxStale || engine.ctx.state !== "running")))) {
+      diag(`${label}: recreating AudioContext (was ${before}${engine.ctxStale ? ", mic used since" : ""})`);
       teardownContext();
     }
     const ctx = await ensureContext();
     if (ctx.state !== "running") {
       try { await Promise.race([ctx.resume(), new Promise((r) => setTimeout(r, 1500))]); } catch (_) { /* autoplay policy */ }
     }
+    if (fresh && typeof ctx.setSinkId === "function" && !ctx.__sinkSet) {
+      ctx.__sinkSet = true;
+      try {
+        await Promise.race([ctx.setSinkId(""), new Promise((r) => setTimeout(r, 800))]);
+        diag(`${label}: setSinkId("") done (default output)`);
+      } catch (e) { diag(`${label}: setSinkId failed ${e && e.name}`); }
+    }
+    diag(`${label}: ctx state before=${before} after resume=${ctx.state}`);
     return ctx;
   }
 
@@ -938,16 +1129,20 @@ input[type="range"] {
           if (v > peak) peak = v;
         }
       }
+      if (peak > engine.peakSeen) engine.peakSeen = peak;
       for (const el of engine.mediaEls) {
         if (!el.paused && !el.ended && !el.muted) peak = Math.max(peak, 0.5 * el.volume);
       }
+      if (state.transport === "recording") peak = Math.max(peak, cap.livePeak);
       hold = Math.max(peak, hold * 0.9);
       ui.meterFill.style.width = `${Math.min(100, Math.round(Math.sqrt(hold) * 100))}%`;
       if (state.transport === "playing" || state.transport === "recording" || state.transport === "counting") {
         if (engine.ctx && engine.ctx.state !== "running") {
           ui.meterLabel.textContent = "Output level: audio is paused by the browser. Tap Play again.";
         } else {
-          ui.meterLabel.textContent = hold > 0.002 ? "Output level: sound is playing" : "Output level";
+          ui.meterLabel.textContent = state.transport === "recording"
+            ? `Mic level ${Math.round(cap.livePeak * 100)}% (max ${Math.round(cap.maxPeak * 100)}%)`
+            : (hold > 0.002 ? "Output level: sound is playing" : "Output level");
         }
       }
       if (state.transport !== "stopped" || hold > 0.001) {
@@ -1033,7 +1228,7 @@ input[type="range"] {
   function updateMediaElGains() {
     for (const el of engine.mediaEls) {
       const track = state.tracks.find((t) => t.id === el.__trackId);
-      if (!track) continue;
+      if (!track || el.__plain) continue;
       el.volume = Math.min(1, Math.max(0, track.volume));
       el.muted = !isAudible(track);
     }
@@ -1072,6 +1267,8 @@ input[type="range"] {
     const dur = track.buffer.duration;
     const off = Math.min(Math.max(0, offsetSec), Math.max(0, dur - 0.001));
     source.start(when, off);
+    diag(`  source.start(${f3(when)}, offset ${f3(off)}) for "${track.name}" (now ${f3(ctx.currentTime)}) vol=${f3(vol.gain.value)} mute-gain=${mute.gain.value}`);
+    source.onended = () => diag(`  source onended "${track.name}" at ctx ${f3(ctx.currentTime)}`);
     engine.sources.push(source);
     engine.trackNodes.set(track.id, { source, vol, mute, revSend, delSend });
     return source;
@@ -1079,28 +1276,40 @@ input[type="range"] {
 
   // Fallback for takes the browser could record but not decode: play the
   // original recording through a plain <audio> element.
-  function startMediaElementTrack(track, when) {
+  function startMediaElementTrack(track, when, plain) {
     if (!track.blob) return;
     const el = new Audio();
     el.setAttribute("playsinline", "");
     el.preload = "auto";
     el.__url = URL.createObjectURL(track.blob);
     el.__trackId = track.id;
+    el.__plain = !!plain;
     el.src = el.__url;
-    el.volume = Math.min(1, Math.max(0, track.volume));
-    el.muted = !isAudible(track);
+    el.volume = plain ? 1 : Math.min(1, Math.max(0, track.volume));
+    el.muted = plain ? false : !isAudible(track);
     engine.mediaEls.push(el);
+    el.addEventListener("ended", () => diag(`  media element ended "${track.name}"`), { once: true });
+    el.addEventListener("error", () => diag(`  media element ERROR "${track.name}" code=${el.error && el.error.code}`), { once: true });
     const delayMs = Math.max(0, (when - engine.ctx.currentTime) * 1000);
     const go = () => {
       if (!engine.mediaEls.includes(el)) return;
       const p = el.play();
-      if (p && p.catch) p.catch(() => setStatus("Tap Play again to hear this take."));
+      if (p && p.then) {
+        p.then(() => diag(`  media element play() resolved "${track.name}"`), (e) => {
+          diag(`  media element play() REJECTED "${track.name}" ${e && e.name}`);
+          setStatus("Tap Play again to hear this take.");
+        });
+      }
     };
     if (delayMs > 5) setTimeout(go, delayMs); else go();
   }
 
   function startPlaybackAt(when) {
     for (const track of state.tracks) {
+      if (state.useMediaPlayer) {
+        if (isAudible(track)) startMediaElementTrack(track, when, true);
+        continue;
+      }
       if (!track.buffer) {
         startMediaElementTrack(track, when);
         continue;
@@ -1173,18 +1382,27 @@ input[type="range"] {
     cancelAnimationFrame(state.raf);
     const wasCounting = state.transport === "counting";
     const recorder = engine.mediaRecorder;
+    const wasRecordingNow = state.transport === "recording";
     const recorderNeverStarted = recorder && recorder.state === "inactive";
-    if (wasCounting || recorderNeverStarted) engine.recordCancelled = true;
+    if (wasCounting) engine.recordCancelled = true;
     stopGraphSources();
+    if (wasRecordingNow || wasCounting) {
+      cap.recording = false;
+      clearTimeout(cap.watchdog);
+      clearInterval(cap.peakLog);
+      diag(`STOP tap: PCM samples=${cap.len} max mic peak=${f3(cap.maxPeak)}`);
+    }
     if (recorder && recorder.state !== "inactive") {
+      // onstop fires after the final dataavailable; the mic is closed after that.
       try { recorder.stop(); } catch (_) { /* */ }
-    } else if (recorderNeverStarted || wasCounting) {
-      releaseMic();
+    } else if (recorderNeverStarted || wasCounting || (wasRecordingNow && engine.recFinishResolve)) {
       engine.mediaRecorder = null;
       const resolve = engine.recFinishResolve;
       engine.recFinishResolve = null;
       if (resolve) resolve();
+      else releaseMic();
     }
+    if (state.transport === "playing") diag(`STOP: max output peak seen=${f3(engine.peakSeen)}`);
     ui.countDisplay.hidden = true;
     ui.record.classList.remove("is-hot");
     const wasRecording = state.transport === "recording" || state.transport === "counting";
@@ -1204,14 +1422,21 @@ input[type="range"] {
       setStatus("Nothing to play yet. Record a take first.");
       return;
     }
-    await unlockContext({ fresh: true });
+    diag(`--- PLAY tap --- ${state.useMediaPlayer ? "(media player mode)" : "(Web Audio)"}`);
+    diag(`userAgent: ${navigator.userAgent}`);
+    await unlockContext({ fresh: true, label: "play" });
     stopGraphSources();
     const ctx = engine.ctx;
+    diagContext("play");
+    diagDevices();
+    diagTracks();
     const beats = state.countInBeats;
     const tCount = ctx.currentTime + 0.05;
     const countDur = beats > 0 ? scheduleCountIn(tCount, beats, state.bpm) : 0;
     startPlaybackAt(tCount + countDur);
     startMeter();
+    if (state.useMediaPlayer) diag("play: media player mode, so the Web Audio output meter is not used; watch for 'play() resolved' / 'ended' lines");
+    else measurePeakFor(Math.min(8000, (countDur + Math.min(2, sessionDuration() || 1)) * 1000 + 400), "play");
     if (beats > 0) {
       state.transport = "counting";
       state.pendingTransport = "playing";
@@ -1227,66 +1452,274 @@ input[type="range"] {
     tickClock();
   }
 
-  async function getMicStream() {
+  const SILENT_PEAK = 0.0015;
+  const RAW_CONSTRAINTS = {
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+    channelCount: { ideal: 1 },
+  };
+
+  const cap = {
+    source: null, proc: null, sink: null,
+    chunks: [], len: 0, padSec: 0,
+    recording: false, livePeak: 0, maxPeak: 0,
+    watchdog: 0, peakLog: 0, retried: false, stream: null,
+  };
+
+  async function getMicStream(constraints) {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      diag("getUserMedia: not available in this browser");
       throw new Error("This browser cannot access the microphone.");
     }
-    return navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-      },
+    diag(`getUserMedia(audio: ${JSON.stringify(constraints)}) ...`);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+      diag("getUserMedia RESOLVED");
+      logStream(stream);
+      return stream;
+    } catch (err) {
+      diag(`getUserMedia REJECTED: ${err && err.name} ${(err && err.message) || ""}`);
+      throw err;
+    }
+  }
+
+  function logStream(stream) {
+    const tracks = stream.getAudioTracks();
+    diag(`stream: ${tracks.length} audio track(s), active=${stream.active}`);
+    tracks.forEach((t, i) => {
+      let st = {};
+      try { st = t.getSettings ? t.getSettings() : {}; } catch (_) { /* */ }
+      diag(`  mic[${i}] label="${t.label}" readyState=${t.readyState} muted=${t.muted} enabled=${t.enabled} sampleRate=${st.sampleRate} channelCount=${st.channelCount} deviceId=${String(st.deviceId || "").slice(0, 12)} echoCancellation=${st.echoCancellation} noiseSuppression=${st.noiseSuppression} autoGainControl=${st.autoGainControl}`);
+      t.addEventListener("mute", () => diag(`  mic[${i}] MUTE event: Android took the mic away (phone call or another app)`));
+      t.addEventListener("unmute", () => diag(`  mic[${i}] unmute event`));
+      t.addEventListener("ended", () => diag(`  mic[${i}] ended event`));
     });
   }
 
+  function disconnectCapture() {
+    for (const n of [cap.source, cap.proc, cap.sink]) {
+      if (n) { try { n.disconnect(); } catch (_) { /* */ } }
+    }
+    if (cap.proc) cap.proc.onaudioprocess = null;
+    cap.source = cap.proc = cap.sink = null;
+  }
+
+  // PCM capture on the SAME AudioContext used for playback.
+  function setupCapture(stream) {
+    disconnectCapture();
+    const ctx = engine.ctx;
+    try {
+      cap.source = ctx.createMediaStreamSource(stream);
+      cap.proc = ctx.createScriptProcessor(4096, 1, 1);
+      cap.sink = ctx.createGain();
+      cap.sink.gain.value = 0;
+      cap.proc.onaudioprocess = (e) => {
+        const input = e.inputBuffer.getChannelData(0);
+        let peak = 0;
+        for (let i = 0; i < input.length; i++) {
+          const v = input[i] < 0 ? -input[i] : input[i];
+          if (v > peak) peak = v;
+        }
+        cap.livePeak = peak;
+        if (!cap.recording) return;
+        if (peak > cap.maxPeak) cap.maxPeak = peak;
+        cap.chunks.push(new Float32Array(input));
+        cap.len += input.length;
+      };
+      cap.source.connect(cap.proc);
+      cap.proc.connect(cap.sink);
+      cap.sink.connect(ctx.destination);
+      diag(`PCM capture connected on the playback context (${ctx.sampleRate} Hz)`);
+      return true;
+    } catch (err) {
+      diag(`PCM capture unavailable: ${err && err.name} ${(err && err.message) || ""}`);
+      disconnectCapture();
+      return false;
+    }
+  }
+
   function releaseMic() {
+    cap.recording = false;
+    clearTimeout(cap.watchdog);
+    clearInterval(cap.peakLog);
+    disconnectCapture();
     if (engine.recStream) {
-      for (const track of engine.recStream.getTracks()) track.stop();
+      const tracks = engine.recStream.getTracks();
+      for (const track of tracks) track.stop();
+      diag(`mic released: tracks stopped, readyState = ${tracks.map((t) => t.readyState).join(", ") || "(none)"}; stream cleared`);
       engine.recStream = null;
       engine.ctxStale = true;
     }
   }
 
-  async function startRecording() {
-    if (state.transport !== "stopped") return;
-    await unlockContext();
+  function showMicAlert(text) {
+    if (!ui.micAlert) return;
+    ui.micAlert.textContent = text || "";
+    ui.micAlert.hidden = !text;
+  }
 
+  function silentReason(stream) {
+    const t = stream && stream.getAudioTracks()[0];
+    if (!t) return "the browser gave no microphone track";
+    if (t.readyState === "ended") return "the microphone was closed by the phone";
+    if (t.muted) return "Android reports the mic is in use by a phone call or another app";
+    if (!t.enabled) return "the mic track is disabled";
+    return "the mic is sending pure silence, which on Android usually means a phone call or another app (voice assistant, recorder, call app) is holding it";
+  }
+
+  const CALL_HINT = "If you’re on a phone call, hang up (or finish the call), then tap Record again. Android blocks the mic for other apps during calls.";
+
+  function wireRecorder(stream) {
+    const mime = pickMime();
+    let recorder;
+    try {
+      recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    } catch (err) {
+      diag(`MediaRecorder failed: ${err && err.name}`);
+      return null;
+    }
+    engine.recMime = recorder.mimeType || mime || "audio/webm";
+    recorder.ondataavailable = (e) => {
+      if (engine.mediaRecorder !== recorder) return;
+      if (e.data && e.data.size) engine.recChunks.push(e.data);
+    };
+    recorder.onstop = () => {
+      if (engine.mediaRecorder !== recorder) return;
+      diag(`MediaRecorder stopped (final data flushed, ${engine.recChunks.length} chunk(s))`);
+      const r = engine.recFinishResolve;
+      if (r) r();
+    };
+    recorder.onerror = (e) => {
+      if (engine.mediaRecorder !== recorder) return;
+      diag(`MediaRecorder error: ${e.error && e.error.name}`);
+      const r = engine.recFinishReject;
+      if (r) r(e.error || new Error("Recording failed."));
+    };
+    return recorder;
+  }
+
+  // If the mic is silent after ~1 s, explain and retry once with plain {audio:true}.
+  async function micWatchdog() {
+    if (state.transport !== "recording" || !cap.recording) return;
+    if (cap.maxPeak >= SILENT_PEAK) {
+      if (cap.retried) { diag("mic OK after retry"); showMicAlert("Mic recovered after retrying with standard settings. Keep going."); }
+      return;
+    }
+    const reason = silentReason(engine.recStream);
+    diag(`MIC SILENT after 1s: max peak ${f3(cap.maxPeak)} (${reason})`);
+    if (cap.retried) {
+      showMicAlert(`Mic is silent: ${reason}. ${CALL_HINT}`);
+      return;
+    }
+    cap.retried = true;
+    showMicAlert(`Mic is silent: ${reason}. Retrying with the phone’s standard mic settings… ${CALL_HINT}`);
+    diag("retrying getUserMedia({audio:true})");
+    const old = engine.mediaRecorder;
+    engine.mediaRecorder = null;
+    if (old && old.state !== "inactive") { try { old.stop(); } catch (_) { /* */ } }
+    if (engine.recStream) {
+      for (const t of engine.recStream.getTracks()) t.stop();
+      engine.recStream = null;
+    }
+    disconnectCapture();
     let stream;
     try {
-      stream = await getMicStream();
+      stream = await getMicStream(true);
     } catch (err) {
-      setStatus(err && err.name === "NotAllowedError"
-        ? "Microphone permission was denied."
-        : "Could not open the microphone.");
+      showMicAlert(`Mic is silent and could not be reopened (${err && err.name}). ${CALL_HINT}`);
+      if (state.transport === "recording") stopAll("Stopped");
+      return;
+    }
+    if (state.transport !== "recording") {
+      for (const t of stream.getTracks()) t.stop();
+      diag("retry finished after Stop; new mic closed");
       return;
     }
     engine.recStream = stream;
-    engine.ctxStale = true;
+    engine.recChunks = [];
+    cap.chunks = [];
+    cap.len = 0;
+    cap.maxPeak = 0;
+    cap.padSec = Math.max(0, engine.ctx.currentTime - state.playStartedAt);
+    setupCapture(stream);
+    const rec = wireRecorder(stream);
+    engine.mediaRecorder = rec;
+    if (rec) { try { rec.start(100); } catch (e) { diag(`MediaRecorder restart failed: ${e.name}`); } }
+    cap.watchdog = setTimeout(micWatchdog, 1200);
+  }
 
-    const mime = pickMime();
-    if (typeof MediaRecorder === "undefined") {
-      releaseMic();
-      setStatus("MediaRecorder is not supported in this browser.");
-      return;
+  function pcmToBuffer(ctx) {
+    const pad = Math.round(cap.padSec * ctx.sampleRate);
+    const len = pad + cap.len;
+    if (!len) return null;
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const out = buf.getChannelData(0);
+    let o = pad;
+    for (const c of cap.chunks) { out.set(c, o); o += c.length; }
+    return buf;
+  }
+
+  async function startRecording() {
+    if (state.transport !== "stopped") return;
+    diag("--- RECORD tap ---");
+    diag(`userAgent: ${navigator.userAgent}`);
+    showMicAlert("");
+    const needFresh = !engine.ctx || engine.ctx.state !== "running";
+    await unlockContext({ fresh: needFresh, label: "record" });
+    diagContext("record");
+    diagPermission();
+    diagDevices();
+
+    let stream;
+    try {
+      stream = await getMicStream(RAW_CONSTRAINTS);
+    } catch (err) {
+      if (err && (err.name === "OverconstrainedError" || err.name === "TypeError")) {
+        try { stream = await getMicStream(true); } catch (e2) { err = e2; }
+      }
+      if (!stream) {
+        setStatus(err && err.name === "NotAllowedError"
+          ? "Microphone permission was denied."
+          : `Could not open the microphone (${(err && err.name) || "error"}).`);
+        if (err && err.name === "NotReadableError") showMicAlert(`The mic is busy. ${CALL_HINT}`);
+        return;
+      }
+    }
+    engine.recStream = stream;
+    engine.ctxStale = true;
+    const t0 = stream.getAudioTracks()[0];
+    if (t0 && t0.muted) {
+      diag("mic track is MUTED right after opening");
+      showMicAlert(`Android says the mic is in use (phone call or another app). ${CALL_HINT}`);
     }
 
+    if (typeof MediaRecorder === "undefined") diag("MediaRecorder not supported; PCM capture only");
+
     engine.recChunks = [];
-    engine.recMime = mime;
     engine.recordCancelled = false;
-    const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    cap.chunks = [];
+    cap.len = 0;
+    cap.padSec = 0;
+    cap.maxPeak = 0;
+    cap.livePeak = 0;
+    cap.retried = false;
+    const pcmOk = setupCapture(stream);
+    const recorder = typeof MediaRecorder !== "undefined" ? wireRecorder(stream) : null;
+    if (!pcmOk && !recorder) {
+      releaseMic();
+      setStatus("This browser can’t record audio here.");
+      return;
+    }
     engine.mediaRecorder = recorder;
-    engine.recMime = recorder.mimeType || mime || "audio/webm";
 
-    recorder.ondataavailable = (e) => {
-      if (e.data && e.data.size) engine.recChunks.push(e.data);
-    };
-
+    let finishResolve;
     const finish = new Promise((resolve, reject) => {
+      finishResolve = resolve;
       engine.recFinishResolve = resolve;
-      recorder.onstop = () => resolve();
-      recorder.onerror = (e) => reject(e.error || new Error("Recording failed."));
+      engine.recFinishReject = reject;
     });
+    engine.recStopPcmOnly = () => finishResolve();
 
     stopGraphSources();
     const ctx = engine.ctx;
@@ -1306,22 +1739,33 @@ input[type="range"] {
     const waitMs = Math.max(0, (tStart - ctx.currentTime) * 1000 - 8);
     ui.record.disabled = true;
     ui.play.disabled = true;
+    const startToken = {};
+    engine.recStartToken = startToken;
 
     engine.pendingStartTimer = window.setTimeout(() => {
       engine.pendingStartTimer = 0;
-      if (engine.recordCancelled || engine.mediaRecorder !== recorder) return;
+      if (engine.recordCancelled || engine.recStartToken !== startToken) return;
       try {
+        diagTracks();
         startPlaybackAt(engine.ctx.currentTime);
-        recorder.start(100);
+        if (recorder) recorder.start(100);
+        cap.recording = true;
         state.transport = "recording";
         state.pendingTransport = null;
         state.playStartedAt = engine.ctx.currentTime;
         ui.record.classList.add("is-hot");
         setStatus("Recording… tap Stop when you’re done.", "is-recording");
+        diag(`recording started at ctx ${f3(engine.ctx.currentTime)} (PCM ${pcmOk ? "on" : "off"}, MediaRecorder ${recorder ? engine.recMime : "off"})`);
         startMeter();
         cancelAnimationFrame(state.raf);
         tickClock();
+        cap.watchdog = setTimeout(micWatchdog, 1200);
+        cap.peakLog = setInterval(() => {
+          const t = engine.recStream && engine.recStream.getAudioTracks()[0];
+          diag(`  mic peak now=${f3(cap.livePeak)} max=${f3(cap.maxPeak)} pcmSamples=${cap.len} track readyState=${t ? t.readyState : "-"} muted=${t ? t.muted : "-"}`);
+        }, 1000);
       } catch (err) {
+        diag(`could not start recorder: ${err && err.name}`);
         releaseMic();
         engine.mediaRecorder = null;
         state.transport = "stopped";
@@ -1344,25 +1788,58 @@ input[type="range"] {
     }
 
     engine.recFinishResolve = null;
+    engine.recFinishReject = null;
+    engine.recStopPcmOnly = null;
+    // Recorder has flushed its final data (onstop) - only now close the mic.
+    cap.recording = false;
+    releaseMic();
+    ui.record.classList.remove("is-hot");
 
-    if (engine.recordCancelled && !engine.recChunks.length) {
-      releaseMic();
-      engine.mediaRecorder = null;
-      ui.record.classList.remove("is-hot");
+    const chunks = engine.recChunks.slice();
+    const type = engine.recMime || "audio/webm";
+    engine.mediaRecorder = null;
+    engine.recChunks = [];
+
+    if (engine.recordCancelled && !chunks.length && !cap.len) {
       ui.record.disabled = false;
       ui.play.disabled = false;
       setStatus("Stopped");
       return;
     }
 
-    releaseMic();
-    ui.record.classList.remove("is-hot");
-    const chunks = engine.recChunks.slice();
-    const type = engine.recMime || "audio/webm";
-    engine.mediaRecorder = null;
-    engine.recChunks = [];
+    const ctx2 = engine.ctx;
+    const pcmBuf = pcmToBuffer(ctx2);
+    const pcmPeak = pcmBuf ? bufferPeak(pcmBuf) : 0;
+    cap.chunks = [];
+    let mrBlob = chunks.length ? new Blob(chunks, { type }) : null;
+    let mrBuf = null;
+    let mrErr = "";
+    if (mrBlob) {
+      try { mrBuf = await decodeBlob(mrBlob); } catch (e) { mrErr = (e && e.name) || "error"; }
+    }
+    const mrPeak = mrBuf ? bufferPeak(mrBuf) : 0;
+    diag(`MediaRecorder blob: ${mrBlob ? `${mrBlob.type} ${mrBlob.size} bytes` : "none"}; decoded: ${mrBuf ? `${mrBuf.length} samples, ${mrBuf.duration.toFixed(2)}s, peak ${f3(mrPeak)}` : `FAILED ${mrErr}`}`);
+    diag(`PCM capture: ${pcmBuf ? `${pcmBuf.length} samples, ${pcmBuf.duration.toFixed(2)}s, peak ${f3(pcmPeak)}${cap.padSec ? `, padded ${cap.padSec.toFixed(2)}s after mic retry` : ""}` : "none"}`);
 
-    if (!chunks.length) {
+    let buffer = null;
+    let blob = null;
+    let mimeType = type;
+    let source = "";
+    const usePcm = pcmBuf && pcmPeak >= SILENT_PEAK && (cap.padSec > 0 || mrPeak < SILENT_PEAK);
+    if (usePcm) {
+      buffer = pcmBuf; blob = makeWavBlob(pcmBuf.getChannelData(0), pcmBuf.sampleRate); mimeType = "audio/wav"; source = "PCM";
+    } else if (mrBuf && mrPeak >= SILENT_PEAK) {
+      buffer = mrBuf; blob = mrBlob; source = "MediaRecorder";
+    } else if (pcmBuf) {
+      buffer = pcmBuf; blob = makeWavBlob(pcmBuf.getChannelData(0), pcmBuf.sampleRate); mimeType = "audio/wav"; source = "PCM (silent)";
+    } else if (mrBuf) {
+      buffer = mrBuf; blob = mrBlob; source = "MediaRecorder (silent)";
+    } else if (mrBlob) {
+      blob = mrBlob; source = "media-player fallback";
+    }
+    diag(`take uses: ${source || "nothing"}`);
+
+    if (!blob) {
       setStatus("Recording was empty. Try again?");
       state.transport = "stopped";
       ui.record.disabled = false;
@@ -1370,25 +1847,17 @@ input[type="range"] {
       return;
     }
 
-    const blob = new Blob(chunks, { type });
-    let buffer = null;
-    try {
-      buffer = await decodeBlob(blob);
-    } catch (err) {
-      buffer = null;
-    }
     const index = state.tracks.length + 1;
     const peak = buffer ? bufferPeak(buffer) : 0;
-    // Phone mics with auto-gain off can record very quietly; lift quiet takes
-    // with the track volume (max 200%) so playback is clearly audible.
     let volume = 1;
-    if (buffer && peak > 0.0005 && peak < 0.25) volume = Math.min(2, Math.round((0.5 / peak) * 100) / 100);
+    if (buffer && peak >= SILENT_PEAK && peak < 0.25) volume = Math.min(2, Math.round((0.5 / peak) * 100) / 100);
     state.tracks.push({
       id: uid(),
       name: `Track ${index}`,
       blob,
       buffer,
-      mimeType: type,
+      peak,
+      mimeType,
       volume,
       muted: false,
       solo: false,
@@ -1399,9 +1868,12 @@ input[type="range"] {
     renderTracks();
     if (!buffer) {
       setStatus(`Captured Track ${index}. It will play through the basic audio player on this browser.`);
-    } else if (peak <= 0.0005) {
-      setStatus(`Captured ${buffer.duration.toFixed(1)}s as Track ${index}, but it’s silent. Check that the mic isn’t blocked or used by another app.`);
+    } else if (peak < SILENT_PEAK) {
+      const reason = "the mic recorded silence";
+      setStatus(`Captured ${buffer.duration.toFixed(1)}s as Track ${index}, but it’s silent.`);
+      showMicAlert(`Mic is silent: ${reason}. ${CALL_HINT}`);
     } else {
+      showMicAlert("");
       setStatus(`Captured ${buffer.duration.toFixed(1)}s as Track ${index}.${volume > 1 ? " It was quiet, so its volume was raised." : ""}`);
     }
     state.transport = "stopped";
@@ -1482,6 +1954,7 @@ input[type="range"] {
           <input class="track-name" type="text" maxlength="60" value="">
           <button type="button" class="btn btn-tiny btn-mute ${track.muted ? "is-on" : ""}" aria-pressed="${track.muted}">M</button>
           <button type="button" class="btn btn-tiny btn-solo ${track.solo ? "is-solo" : ""}" aria-pressed="${track.solo}">S</button>
+          <button type="button" class="btn btn-tiny btn-media" title="Play this take through the phone’s media player">▶ Media</button>
           <button type="button" class="btn btn-tiny danger btn-del" title="Delete track">Delete</button>
         </div>
         <canvas class="wave" aria-hidden="true"></canvas>
@@ -1514,6 +1987,10 @@ input[type="range"] {
         track.solo = !track.solo;
         renderTracks();
         refreshAllLiveGains();
+      });
+      el.querySelector(".btn-media").addEventListener("click", () => {
+        diag(`--- MEDIA PLAYER tap "${track.name}" --- blob ${track.blob ? `${track.blob.type} ${track.blob.size}B` : "none"}`);
+        if (track.blob) playBlobPlain(track.blob, `media "${track.name}"`);
       });
       el.querySelector(".btn-del").addEventListener("click", () => {
         if (!confirm(`Delete “${track.name}”?`)) return;
@@ -1955,7 +2432,6 @@ input[type="range"] {
       if (engine.ctx && engine.ctx.state === "suspended") engine.ctx.resume().catch(() => {});
     };
     ui.play.addEventListener("click", () => {
-      kick();
       playAll().catch((e) => setStatus(e.message || "Playback failed."));
     });
     ui.stop.addEventListener("click", () => {
@@ -1966,6 +2442,65 @@ input[type="range"] {
       }
       stopAll("Stopped");
     });
+    ui.testTone.addEventListener("click", () => {
+      diag("--- TEST TONE (Web Audio) tap ---");
+      const run = async () => {
+        await unlockContext({ fresh: true, label: "tone" });
+        const ctx = engine.ctx;
+        diagContext("tone");
+        diagDevices();
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.frequency.value = 440;
+        g.gain.value = 0.4;
+        osc.connect(g);
+        g.connect(ctx.destination);
+        g.connect(engine.meter);
+        const t = ctx.currentTime + 0.02;
+        osc.start(t);
+        osc.stop(t + 1);
+        diag(`tone: osc.start(${f3(t)}) 440 Hz for 1 s straight to destination`);
+        osc.onended = () => diag(`tone: onended at ctx ${f3(ctx.currentTime)}`);
+        measurePeakFor(900, "tone");
+        startMeter();
+      };
+      run().catch((e) => diag(`tone failed: ${e && e.name} ${e && e.message}`));
+    });
+    ui.testToneMedia.addEventListener("click", () => {
+      diag("--- TEST TONE (media player) tap ---");
+      const rate = 44100;
+      const n = rate;
+      const samples = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const env = Math.min(1, i / 400, (n - i) / 400);
+        samples[i] = 0.5 * env * Math.sin((2 * Math.PI * 440 * i) / rate);
+      }
+      const blob = makeWavBlob(samples, rate);
+      diag(`media tone: WAV ${blob.size} bytes, volume 1, not muted`);
+      playBlobPlain(blob, "media tone");
+    });
+    ui.useMediaPlayer.addEventListener("change", () => {
+      state.useMediaPlayer = ui.useMediaPlayer.checked;
+      diag(`media player mode ${state.useMediaPlayer ? "ON" : "OFF"}`);
+    });
+    ui.diagClear.addEventListener("click", () => { diagLines.length = 0; ui.diagLog.textContent = ""; });
+    ui.diagCopy.addEventListener("click", () => {
+      const text = diagLines.join("\n");
+      const fallback = () => {
+        const r = document.createRange();
+        r.selectNodeContents(ui.diagLog);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+        let ok = false;
+        try { ok = document.execCommand("copy"); } catch (_) { /* */ }
+        setStatus(ok ? "Diagnostics copied." : "Select the diagnostics text and copy it.");
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => setStatus("Diagnostics copied."), fallback);
+      } else fallback();
+    });
+
     ui.record.addEventListener("click", () => {
       kick();
       startRecording().catch((e) => setStatus(e.message || "Recording failed."));
@@ -2059,6 +2594,8 @@ input[type="range"] {
       // IndexedDB may be blocked in some private modes.
     }
     setStatus("Ready");
+    diag(`page loaded. userAgent: ${navigator.userAgent}`);
+    diag(`secure context: ${window.isSecureContext}; AudioContext: ${!!(window.AudioContext || window.webkitAudioContext)}; MediaRecorder: ${typeof MediaRecorder !== "undefined"}; setSinkId on AudioContext: ${!!(window.AudioContext && AudioContext.prototype.setSinkId)}`);
     window.__revampedReverbTest = {
       snapshot: snapshotForTest,
       async exportPayload() {
