@@ -765,7 +765,10 @@ input[type="range"] {
     <section class="panel tracks-panel" aria-label="Tracks">
       <div class="tracks-head">
         <h2>Tracks</h2>
-        <button type="button" id="btn-align" class="btn btn-tiny">Auto-align starts</button>
+        <span class="tool-group">
+          <button type="button" id="btn-align" class="btn btn-tiny" title="Line every take up with the first one">Sync starts</button>
+          <button type="button" id="btn-reset-offsets" class="btn btn-tiny" title="Set every take's offset back to 0 ms">Reset offsets</button>
+        </span>
       </div>
       <label class="diag-toggle"><input type="checkbox" id="auto-align-new" checked> Auto-align new takes</label>
       <div id="track-list" class="track-list"></div>
@@ -847,6 +850,7 @@ input[type="range"] {
     meterLabel: $("meter-label"),
     micAlert: $("mic-alert"),
     alignBtn: $("btn-align"),
+    resetOffsets: $("btn-reset-offsets"),
     phoneProcessing: $("phone-processing"),
     autoAlignNew: $("auto-align-new"),
     monSpeaker: $("mon-speaker"),
@@ -1521,7 +1525,7 @@ input[type="range"] {
     updateMediaElGains();
   }
 
-  function connectTrackSource(track, when, offsetSec) {
+  function connectTrackSource(track, when, offsetSec, logs) {
     const ctx = engine.ctx;
     const source = ctx.createBufferSource();
     source.buffer = track.buffer;
@@ -1547,15 +1551,21 @@ input[type="range"] {
     delSend.connect(engine.delayInput);
 
     const dur = track.buffer.duration;
-    // negative offset = start the take later (delay), positive = skip into it
-    const delay = offsetSec < 0 ? -offsetSec : 0;
-    const off = Math.min(Math.max(0, offsetSec), Math.max(0, dur - 0.001));
-    when += delay;
-    source.start(when, off);
-    diag(`  source.start(${f3(when)}, offset ${f3(off)}) for "${track.name}" (now ${f3(ctx.currentTime)}) vol=${f3(vol.gain.value)} mute-gain=${mute.gain.value}`);
+    // Shared timeline: this take's time 0 plays at `when`. Positive offset =
+    // skip into the buffer, negative = start later.
+    let startAt = when + (offsetSec < 0 ? -offsetSec : 0);
+    let off = Math.max(0, offsetSec);
+    // If we're already past the scheduled time, start now but skip ahead by the
+    // same amount, so the take stays locked to the others instead of lagging.
+    const now = ctx.currentTime;
+    let late = 0;
+    if (startAt < now) { late = now - startAt; off += late; startAt = now; }
+    off = Math.min(off, Math.max(0, dur - 0.001));
+    source.start(startAt, off);
     source.onended = () => diag(`  source onended "${track.name}" at ctx ${f3(ctx.currentTime)}`);
     engine.sources.push(source);
     engine.trackNodes.set(track.id, { source, vol, mute, revSend, delSend });
+    if (logs) logs.push(`  source.start(${startAt.toFixed(4)}, offset ${off.toFixed(4)}) "${track.name}" timeline offset ${(offsetSec * 1000).toFixed(1)} ms${late ? ` (scheduled late by ${(late * 1000).toFixed(1)} ms, compensated)` : ""} vol=${f3(vol.gain.value)} mute-gain=${mute.gain.value}`);
     return source;
   }
 
@@ -1595,19 +1605,76 @@ input[type="range"] {
     if (delayMs > 5) setTimeout(go, delayMs); else go();
   }
 
-  function startPlaybackAt(when) {
+  // Every track is scheduled against ONE start time. All buffers are ready
+  // before this runs (no awaits, no per-track logging inside the loop).
+  function startPlaybackAt(when, mix) {
+    const logs = [];
+    const lateMedia = [];
+    if (state.useMediaPlayer && mix) {
+      startMixElement(mix, when, logs);
+    }
     for (const track of state.tracks) {
       if (state.useMediaPlayer) {
-        if (isAudible(track)) startMediaElementTrack(track, when, true);
+        if (mix && mix.included.has(track.id)) continue;
+        if (isAudible(track)) lateMedia.push(track);
         continue;
       }
-      if (!track.buffer) {
-        startMediaElementTrack(track, when);
-        continue;
-      }
-      connectTrackSource(track, when, trackOffsetSec(track));
+      if (!track.buffer) { lateMedia.push(track); continue; }
+      connectTrackSource(track, when, trackOffsetSec(track), logs);
     }
+    for (const track of lateMedia) startMediaElementTrack(track, when, state.useMediaPlayer);
     state.playStartedAt = when;
+    logs.unshift(`schedule: shared start t0=${when.toFixed(4)} (ctx now ${engine.ctx.currentTime.toFixed(4)}), ${state.tracks.length} track(s)${lateMedia.length ? `; ${lateMedia.length} undecodable take(s) on the basic player (not sample-locked)` : ""}`);
+    for (const l of logs) diag(l);
+  }
+
+  // Media-player mode: mix all audible takes, with their offsets, into ONE
+  // buffer offline, so there is a single <audio> element and nothing drifts.
+  async function renderMediaMix() {
+    const parts = state.tracks.filter((t) => t.buffer && isAudible(t));
+    if (!parts.length) return null;
+    const sr = parts[0].buffer.sampleRate;
+    let end = 0;
+    for (const t of parts) end = Math.max(end, t.buffer.duration - trackOffsetSec(t));
+    const len = Math.max(1, Math.ceil(end * sr));
+    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const off = new OAC(1, len, sr);
+    for (const t of parts) {
+      const src = off.createBufferSource();
+      src.buffer = t.buffer;
+      const g = off.createGain();
+      g.gain.value = t.volume;
+      src.connect(g);
+      g.connect(off.destination);
+      const o = trackOffsetSec(t);
+      src.start(o < 0 ? -o : 0, o > 0 ? Math.min(o, t.buffer.duration) : 0);
+    }
+    const rendered = await off.startRendering();
+    const y = rendered.getChannelData(0);
+    let pk = 0;
+    for (let i = 0; i < y.length; i++) { const a = Math.abs(y[i]); if (a > pk) pk = a; }
+    if (pk > 0.98) { const g = 0.98 / pk; for (let i = 0; i < y.length; i++) y[i] *= g; }
+    return { blob: makeWavBlob(y, sr), samples: y, sampleRate: sr, included: new Set(parts.map((t) => t.id)), duration: len / sr };
+  }
+
+  function startMixElement(mix, when, logs) {
+    const el = new Audio();
+    el.setAttribute("playsinline", "");
+    el.preload = "auto";
+    el.__url = URL.createObjectURL(mix.blob);
+    el.__plain = true;
+    el.src = el.__url;
+    el.volume = 1;
+    applyElSink(el);
+    engine.mediaEls.push(el);
+    const delayMs = Math.max(0, (when - engine.ctx.currentTime) * 1000);
+    setTimeout(() => {
+      if (!engine.mediaEls.includes(el)) return;
+      const p = el.play();
+      if (p && p.then) p.then(() => diag("  mixed media element play() resolved"), (e) => diag(`  mixed media element play() REJECTED ${e && e.name}`));
+    }, delayMs);
+    el.addEventListener("ended", () => diag("  mixed media element ended"), { once: true });
+    logs.push(`  media player: ${mix.included.size} take(s) pre-mixed into one ${mix.duration.toFixed(2)}s buffer (sample-locked)`);
   }
 
   function scheduleCountIn(startTime, beats, bpm) {
@@ -1722,10 +1789,16 @@ input[type="range"] {
     diagTracks();
     if (state.useMediaPlayer) diag(`play: media player mode plays the takes dry (reverb ${state.reverb.enabled ? "ON but not applied here" : "OFF"})`);
     else reverbDiagLine("play");
+    let mix = null;
+    if (state.useMediaPlayer) {
+      setStatus("Preparing the mix…");
+      try { mix = await renderMediaMix(); } catch (e) { diag(`mix failed: ${e && e.name}; playing takes one by one`); }
+      if (state.transport !== "stopped") return;
+    }
     const beats = state.countInBeats;
-    const tCount = ctx.currentTime + 0.05;
+    const tCount = ctx.currentTime + 0.1; // one shared start, 100 ms ahead
     const countDur = beats > 0 ? scheduleCountIn(tCount, beats, state.bpm) : 0;
-    startPlaybackAt(tCount + countDur);
+    startPlaybackAt(tCount + countDur, mix);
     startMeter();
     reverbHealthCheck(tCount + countDur);
     if (state.useMediaPlayer) diag("play: media player mode, so the Web Audio output meter is not used; watch for 'play() resolved' / 'ended' lines");
@@ -1824,6 +1897,7 @@ input[type="range"] {
         cap.livePeak = peak;
         if (!cap.recording) return;
         if (peak > cap.maxPeak) cap.maxPeak = peak;
+        if (cap.startTime == null) cap.startTime = ctx.currentTime - input.length / ctx.sampleRate;
         cap.chunks.push(new Float32Array(input));
         cap.len += input.length;
       };
@@ -1941,11 +2015,11 @@ input[type="range"] {
     cap.chunks = [];
     cap.len = 0;
     cap.maxPeak = 0;
-    cap.padSec = Math.max(0, engine.ctx.currentTime - state.playStartedAt);
+    cap.startTime = null;
     setupCapture(stream);
     const rec = wireRecorder(stream);
     engine.mediaRecorder = rec;
-    if (rec) { try { rec.start(100); } catch (e) { diag(`MediaRecorder restart failed: ${e.name}`); } }
+    if (rec) { try { rec.start(100); engine.mrStartTime = engine.ctx.currentTime; } catch (e) { diag(`MediaRecorder restart failed: ${e.name}`); } }
     cap.watchdog = setTimeout(micWatchdog, 1200);
   }
 
@@ -2048,13 +2122,16 @@ input[type="range"] {
       engine.pendingStartTimer = 0;
       if (engine.recordCancelled || engine.recStartToken !== startToken) return;
       try {
-        diagTracks();
-        startPlaybackAt(engine.ctx.currentTime);
+        const t0 = Math.max(tStart, engine.ctx.currentTime + 0.03);
         if (recorder) recorder.start(100);
+        engine.mrStartTime = engine.ctx.currentTime;
+        cap.startTime = null;
         cap.recording = true;
+        startPlaybackAt(t0);
         state.transport = "recording";
         state.pendingTransport = null;
-        state.playStartedAt = engine.ctx.currentTime;
+        state.playStartedAt = t0;
+        diagTracks();
         ui.record.classList.add("is-hot");
         setStatus("Recording… tap Stop when you’re done.", "is-recording");
         diag(`recording started at ctx ${f3(engine.ctx.currentTime)} (PCM ${pcmOk ? "on" : "off"}, MediaRecorder ${recorder ? engine.recMime : "off"})`);
@@ -2127,7 +2204,7 @@ input[type="range"] {
     let blob = null;
     let mimeType = type;
     let source = "";
-    const usePcm = pcmBuf && pcmPeak >= SILENT_PEAK && (cap.padSec > 0 || mrPeak < SILENT_PEAK);
+    const usePcm = pcmBuf && pcmPeak >= SILENT_PEAK && (cap.retried || mrPeak < SILENT_PEAK);
     if (usePcm) {
       buffer = pcmBuf; blob = makeWavBlob(pcmBuf.getChannelData(0), pcmBuf.sampleRate); mimeType = "audio/wav"; source = "PCM";
     } else if (mrBuf && mrPeak >= SILENT_PEAK) {
@@ -2139,7 +2216,11 @@ input[type="range"] {
     } else if (mrBlob) {
       blob = mrBlob; source = "media-player fallback";
     }
-    diag(`take uses: ${source || "nothing"}`);
+    // Where did this recording start relative to the playback timeline (t0)?
+    // Positive = it started before t0 (skip that much), negative = after.
+    const recStart = source.startsWith("PCM") ? cap.startTime : engine.mrStartTime;
+    const startCompMs = Number.isFinite(recStart) ? Math.round((state.playStartedAt - recStart) * 1000) : 0;
+    diag(`take uses: ${source || "nothing"}; recorder started ${Math.abs(startCompMs)} ms ${startCompMs >= 0 ? "before" : "after"} the shared start; latency comp ${state.latencyMs} ms`);
 
     if (!blob) {
       setStatus("Recording was empty. Try again?");
@@ -2164,7 +2245,7 @@ input[type="range"] {
       volume,
       muted: false,
       solo: false,
-      latencyOffsetMs: buffer ? state.latencyMs : 0,
+      latencyOffsetMs: buffer ? state.latencyMs + startCompMs : 0,
       alignMs: 0,
       octave: 0,
       reverbSend: 0.35,
@@ -2559,6 +2640,32 @@ self.onmessage = (e) => {
     return reduced / Math.max(1, n);
   }
 
+  // The compressor has a few ms of built-in look-ahead delay. Measure it once
+  // per sample rate with a click, and remove it, so polished takes stay aligned.
+  const chainLatencyCache = {};
+  async function polishChainLatency(sr) {
+    if (chainLatencyCache[sr] !== undefined) return chainLatencyCache[sr];
+    let lag = 0;
+    try {
+      const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      const n = Math.round(sr * 0.1);
+      const off = new OAC(1, n, sr);
+      const b = off.createBuffer(1, n, sr);
+      b.getChannelData(0)[Math.round(sr * 0.01)] = 0.05;
+      const src = off.createBufferSource(); src.buffer = b;
+      const comp = off.createDynamicsCompressor();
+      comp.threshold.value = -26; comp.knee.value = 8; comp.ratio.value = 3.5; comp.attack.value = 0.015; comp.release.value = 0.2;
+      src.connect(comp); comp.connect(off.destination); src.start(0);
+      const r = (await off.startRendering()).getChannelData(0);
+      let best = 0, at = Math.round(sr * 0.01);
+      for (let i = 0; i < r.length; i++) { const a = Math.abs(r[i]); if (a > best) { best = a; at = i; } }
+      lag = Math.max(0, at - Math.round(sr * 0.01));
+    } catch (_) { lag = 0; }
+    chainLatencyCache[sr] = lag;
+    diag(`polish chain latency: ${lag} samples (${(lag / sr * 1000).toFixed(2)} ms), removed from polished takes`);
+    return lag;
+  }
+
   async function polishBuffer(raw, onProgress) {
     const t0 = performance.now();
     const sr = raw.sampleRate;
@@ -2594,7 +2701,10 @@ self.onmessage = (e) => {
       }
     }
     const rendered = await off.startRendering();
-    const y = new Float32Array(rendered.getChannelData(0));
+    const yRaw = rendered.getChannelData(0);
+    const lag = await polishChainLatency(sr, preDb);
+    const y = new Float32Array(yRaw.length);
+    y.set(yRaw.subarray(lag), 0);
     const lufs = gatedLoudness(y, sr);
     let gainDb = Math.max(-24, Math.min(30, POLISH_TARGET_LOUDNESS - lufs));
     // Don't let the limiter do more than ~4 dB of work on the loud bits (it
@@ -2994,9 +3104,11 @@ self.onmessage = (e) => {
             <button type="button" class="btn btn-tiny dup-down" ${canShift && (track.octave || 0) > -2 ? "" : "disabled"} title="New track one octave down">Duplicate −8va</button>
           </span>
           <span class="tool-group">
-            <span>Start</span>
+            <span>Offset</span>
             <button type="button" class="btn btn-tiny al-minus" title="Move 10 ms earlier">−10</button>
-            <em class="al-label">${fmtShift(track.alignMs)}</em>
+            <button type="button" class="btn btn-tiny al-minus1" title="Move 1 ms earlier">−1</button>
+            <em class="al-label" title="Recording compensation ${Math.round(track.latencyOffsetMs || 0)} ms is applied separately">${fmtShift(track.alignMs)}</em>
+            <button type="button" class="btn btn-tiny al-plus1" title="Move 1 ms later">+1</button>
             <button type="button" class="btn btn-tiny al-plus" title="Move 10 ms later">+10</button>
             <button type="button" class="btn btn-tiny al-reset" ${track.alignMs ? "" : "disabled"}>Reset</button>
           </span>
@@ -3050,6 +3162,8 @@ self.onmessage = (e) => {
       };
       el.querySelector(".al-minus").addEventListener("click", () => nudge(-10));
       el.querySelector(".al-plus").addEventListener("click", () => nudge(10));
+      el.querySelector(".al-minus1").addEventListener("click", () => nudge(-1));
+      el.querySelector(".al-plus1").addEventListener("click", () => nudge(1));
       el.querySelector(".al-reset").addEventListener("click", () => { track.alignMs = 0; renderTracks(); persistAfterEdit("timing"); });
       const bindSlider = (sel, key, labelSuffix) => {
         const input = el.querySelector(sel);
@@ -3558,7 +3672,16 @@ self.onmessage = (e) => {
     ui.alignBtn.addEventListener("click", () => {
       const n = alignTracks(null);
       renderTracks();
-      if (n) { setStatus(`Aligned ${n} take${n === 1 ? "" : "s"} to ${state.tracks[0] ? `“${state.tracks[0].name}”` : "the first take"}.`); persistAfterEdit("auto-align"); }
+      if (!n) setStatus("Nothing to sync yet: need two takes with a clear vocal start.");
+      if (n) { setStatus(`Synced ${n} take${n === 1 ? "" : "s"} to ${state.tracks[0] ? `“${state.tracks[0].name}”` : "the first take"}.`); persistAfterEdit("auto-align"); }
+    });
+    ui.resetOffsets.addEventListener("click", () => {
+      let n = 0;
+      for (const t of state.tracks) { if (t.alignMs) { t.alignMs = 0; n++; } }
+      renderTracks();
+      setStatus(n ? `Reset the offset on ${n} take${n === 1 ? "" : "s"}.` : "All offsets are already 0 ms.");
+      diag(`reset offsets: ${n} take(s) set to 0 ms`);
+      if (n) persistAfterEdit("reset offsets");
     });
     ui.autoAlignNew.addEventListener("change", () => {
       state.autoAlignNew = ui.autoAlignNew.checked;
@@ -3730,6 +3853,7 @@ self.onmessage = (e) => {
       },
       async setPolish(i, on) { await setPolish(state.tracks[i], on); return snapshotForTest(); },
       micConstraints() { return micConstraints(); },
+      async renderMix() { const m = await renderMediaMix(); return m ? Array.from(m.samples) : null; },
       trackBuffer(i) { const b = state.tracks[i] && state.tracks[i].buffer; return b ? Array.from(b.getChannelData(0)) : null; },
       async importPayload(data) {
         await applySessionData(data, "Imported session");
