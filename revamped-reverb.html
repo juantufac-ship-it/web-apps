@@ -683,6 +683,7 @@ input[type="range"] {
         </span>
         <p id="monitor-hint" class="monitor-hint" hidden>Plug in or connect earbuds.</p>
       </div>
+      <label class="diag-toggle"><input type="checkbox" id="phone-processing"> Phone processing (auto-volume and noise reduction; can make the voice pump or cut out)</label>
 
       <div class="control-grid">
         <label class="field">
@@ -846,6 +847,7 @@ input[type="range"] {
     meterLabel: $("meter-label"),
     micAlert: $("mic-alert"),
     alignBtn: $("btn-align"),
+    phoneProcessing: $("phone-processing"),
     autoAlignNew: $("auto-align-new"),
     monSpeaker: $("mon-speaker"),
     monEarbuds: $("mon-earbuds"),
@@ -874,6 +876,7 @@ input[type="range"] {
     delay: { enabled: false, time: 0.28, feedback: 0.3, mix: 0.2 },
     useMediaPlayer: false,
     monitorMode: "speaker",
+    phoneProcessing: false,
     autoAlignNew: true,
   };
 
@@ -1211,7 +1214,21 @@ input[type="range"] {
 
     engine.master = ctx.createGain();
     engine.master.gain.value = 1;
-    engine.master.connect(ctx.destination);
+    // Master bus safety limiter so stacked harmonies don't clip.
+    try {
+      engine.busLimiter = ctx.createDynamicsCompressor();
+      engine.busLimiter.threshold.value = -3;
+      engine.busLimiter.knee.value = 2;
+      engine.busLimiter.ratio.value = 20;
+      engine.busLimiter.attack.value = 0.002;
+      engine.busLimiter.release.value = 0.12;
+      engine.master.connect(engine.busLimiter);
+      engine.busLimiter.connect(ctx.destination);
+    } catch (err) {
+      engine.busLimiter = null;
+      engine.master.connect(ctx.destination);
+      diag(`bus limiter unavailable (${err && err.name}); master goes straight to the output`);
+    }
     engine.meter = ctx.createAnalyser();
     engine.meter.fftSize = 1024;
     engine.master.connect(engine.meter);
@@ -1731,11 +1748,14 @@ input[type="range"] {
   const SILENT_PEAK = 0.0015;
   // Speaker: echo cancellation on, so the playback bleeding from the speaker is
   // reduced in the new take. Earbuds: everything off for the cleanest capture.
+  // Phone processing (Android auto-gain + noise suppression) is OFF by default:
+  // it pumps the level and gates soft words, which sounds like the voice cutting out.
   function micConstraints() {
+    const pp = !!state.phoneProcessing;
     return {
       echoCancellation: monitorMode() === "speaker",
-      noiseSuppression: false,
-      autoGainControl: false,
+      noiseSuppression: pp,
+      autoGainControl: pp,
       channelCount: { ideal: 1 },
     };
   }
@@ -1953,7 +1973,7 @@ input[type="range"] {
 
     let stream;
     try {
-      diag(`record: monitor mode=${monitorMode()} sinkId=${JSON.stringify(desiredSinkId())} echoCancellation=${monitorMode() === "speaker"}`);
+      diag(`record: monitor mode=${monitorMode()} sinkId=${JSON.stringify(desiredSinkId())} requested ${JSON.stringify(micConstraints())} (phone processing ${state.phoneProcessing ? "ON" : "OFF"})`);
       stream = await getMicStream(micConstraints());
     } catch (err) {
       if (err && (err.name === "OverconstrainedError" || err.name === "TypeError")) {
@@ -2131,13 +2151,14 @@ input[type="range"] {
 
     const index = state.tracks.length + 1;
     const peak = buffer ? bufferPeak(buffer) : 0;
-    let volume = 1;
-    if (buffer && peak >= SILENT_PEAK && peak < 0.25) volume = Math.min(2, Math.round((0.5 / peak) * 100) / 100);
+    const volume = 1; // Polish sets the level now; no more blind volume boost
     state.tracks.push({
       id: uid(),
       name: `Track ${index}`,
       blob,
       buffer,
+      rawBuffer: buffer,
+      polish: !!buffer && peak >= SILENT_PEAK,
       peak,
       mimeType,
       volume,
@@ -2149,10 +2170,12 @@ input[type="range"] {
       reverbSend: 0.35,
       delaySend: 0.2,
     });
+    const newTrack = state.tracks[state.tracks.length - 1];
     if (buffer && state.autoAlignNew && state.tracks.length > 1 && peak >= SILENT_PEAK) {
-      alignTracks(state.tracks[state.tracks.length - 1]);
+      alignTracks(newTrack);
     }
     renderTracks();
+    if (newTrack.polish) rebuildChain(newTrack).then(() => persistAfterEdit("polish"));
     if (!buffer) {
       setStatus(`Captured Track ${index}. It will play through the basic audio player on this browser.`);
     } else if (peak < SILENT_PEAK) {
@@ -2426,6 +2449,232 @@ self.onmessage = (e) => {
   }
 
   function baseBufferOf(t) { return t.baseBuffer || t.buffer; }
+  function rawOf(t) {
+    if (!t.rawBuffer) t.rawBuffer = t.baseBuffer || t.buffer || null;
+    return t.rawBuffer;
+  }
+
+  // ================= Polish: offline "mix engineer" pass =================
+  const dB = (v) => 20 * Math.log10(Math.max(1e-9, v));
+  const fromDb = (d) => Math.pow(10, d / 20);
+  const POLISH_TARGET_LOUDNESS = -16; // dB (gated RMS of 400 ms blocks, ~LUFS for voice)
+  const POLISH_CEILING = fromDb(-1.5); // sample-peak ceiling ~= -1 dBTP
+
+  function percentile(sorted, q) {
+    return sorted[Math.max(0, Math.min(sorted.length - 1, Math.floor(sorted.length * q)))];
+  }
+
+  function analyzeTake(x, sr) {
+    const W = Math.max(16, Math.round(sr * 0.01));
+    const nw = Math.floor(x.length / W);
+    const rms = new Float32Array(nw);
+    let peak = 0;
+    for (let w = 0; w < nw; w++) {
+      let e = 0;
+      for (let i = w * W, end = i + W; i < end; i++) { const v = x[i]; e += v * v; const a = v < 0 ? -v : v; if (a > peak) peak = a; }
+      rms[w] = Math.sqrt(e / W);
+    }
+    const sorted = Array.from(rms).sort((a, b) => a - b);
+    const floor = Math.max(1e-5, percentile(sorted, 0.1));
+    const loudRms = percentile(sorted, 0.98);
+    const speechThr = Math.max(floor * 4, loudRms * fromDb(-26));
+    const active = sorted.filter((v) => v > speechThr);
+    const speech = active.length ? percentile(active, 0.5) : loudRms;
+    return { W, rms, peak, floor, speech, loudRms, activeFrac: active.length / Math.max(1, nw) };
+  }
+
+  // Gentle downward expander: only pulls the gaps down (max -12 dB), with a
+  // 200 ms hold and slow release, so word endings and soft consonants survive.
+  function applyGate(x, sr, st) {
+    const gateThr = Math.min(st.floor * 2.5, st.speech * fromDb(-24));
+    const holdW = Math.round(0.2 / 0.01);
+    const minGain = fromDb(-12);
+    const target = new Float32Array(st.rms.length);
+    let hold = 0;
+    for (let w = 0; w < st.rms.length; w++) {
+      if (st.rms[w] >= gateThr) { target[w] = 1; hold = holdW; }
+      else if (hold > 0) { target[w] = 1; hold--; }
+      else target[w] = Math.max(minGain, Math.pow(st.rms[w] / gateThr, 2));
+    }
+    // look-ahead: open 20 ms before the level crosses, so attacks aren't clipped
+    for (let w = 0; w < target.length - 2; w++) target[w] = Math.max(target[w], target[w + 1], target[w + 2]);
+    const y = new Float32Array(x.length);
+    const att = 1 - Math.exp(-1 / (0.005 * sr));
+    const rel = 1 - Math.exp(-1 / (0.15 * sr));
+    let g = target.length ? target[0] : 1;
+    for (let i = 0; i < x.length; i++) {
+      const t = target[Math.min(target.length - 1, Math.floor(i / st.W))] ?? 1;
+      g += (t - g) * (t > g ? att : rel);
+      y[i] = x[i] * g;
+    }
+    return { y, gateThr };
+  }
+
+  // Approximate integrated loudness: 400 ms blocks (75% overlap), absolute gate
+  // -70 dB and relative gate -10 dB as in BS.1770 (without K-weighting).
+  function gatedLoudness(y, sr) {
+    const B = Math.round(sr * 0.4), H = Math.round(B / 4);
+    const blocks = [];
+    for (let i = 0; i + B <= y.length; i += H) {
+      let e = 0;
+      for (let j = i; j < i + B; j++) e += y[j] * y[j];
+      blocks.push(e / B);
+    }
+    if (!blocks.length) { let e = 0; for (let i = 0; i < y.length; i++) e += y[i] * y[i]; blocks.push(e / Math.max(1, y.length)); }
+    const abs = blocks.filter((p) => p > Math.pow(10, -70 / 10));
+    if (!abs.length) return -120;
+    const mean1 = abs.reduce((a, b) => a + b, 0) / abs.length;
+    const rel = abs.filter((p) => p > mean1 * Math.pow(10, -10 / 10));
+    const mean2 = rel.reduce((a, b) => a + b, 0) / Math.max(1, rel.length);
+    return 10 * Math.log10(Math.max(1e-12, mean2));
+  }
+
+  // Look-ahead peak limiter (5 ms), guaranteed below the ceiling.
+  function limitPeaks(y, sr, ceiling) {
+    const n = y.length, L = Math.max(1, Math.round(sr * 0.005));
+    const req = new Float32Array(n);
+    for (let i = 0; i < n; i++) { const a = Math.abs(y[i]); req[i] = a > ceiling ? ceiling / a : 1; }
+    // forward-looking sliding minimum over [i, i+L]
+    const m = new Float32Array(n);
+    const dq = new Int32Array(n + L + 1); let h = 0, t = 0;
+    for (let i = n - 1; i >= 0; i--) {
+      while (t > h && req[dq[t - 1]] >= req[i]) t--;
+      dq[t++] = i;
+      while (dq[h] > i + L) h++;
+      m[i] = req[dq[h]];
+    }
+    const rel = 1 - Math.exp(-1 / (0.08 * sr));
+    let acc = 0, g = 1, reduced = 0;
+    const buf = new Float32Array(L);
+    for (let i = 0; i < n; i++) {
+      acc += m[i] - buf[i % L]; buf[i % L] = m[i];
+      const avg = i + 1 >= L ? acc / L : Math.min(1, (acc + (L - i - 1)) / L);
+      g = Math.min(avg, g + (1 - g) * rel);
+      g = Math.min(g, req[i]);
+      if (g < 0.891) reduced++; // more than 1 dB of limiting
+      let v = y[i] * g;
+      if (v > ceiling) v = ceiling; else if (v < -ceiling) v = -ceiling;
+      y[i] = v;
+    }
+    return reduced / Math.max(1, n);
+  }
+
+  async function polishBuffer(raw, onProgress) {
+    const t0 = performance.now();
+    const sr = raw.sampleRate;
+    const x = new Float32Array(monoOf(raw));
+    const st = analyzeTake(x, sr);
+    if (st.peak < SILENT_PEAK || st.loudRms < 1e-4) return { buffer: null, info: "silent take, left as recorded" };
+    const gated = applyGate(x, sr, st);
+    if (onProgress) onProgress(0.1);
+    // bring the speech to about -20 dBFS before the compressor so it behaves the same for any mic distance
+    const preDb = Math.max(-20, Math.min(36, -20 - dB(st.speech)));
+    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const off = new OAC(1, x.length, sr);
+    const src = off.createBufferSource();
+    const inBuf = off.createBuffer(1, x.length, sr);
+    inBuf.copyToChannel(gated.y, 0);
+    src.buffer = inBuf;
+    const hp = off.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 80; hp.Q.value = 0.707;
+    const mud = off.createBiquadFilter(); mud.type = "peaking"; mud.frequency.value = 320; mud.Q.value = 1.0; mud.gain.value = -2.5;
+    const pres = off.createBiquadFilter(); pres.type = "peaking"; pres.frequency.value = 4200; pres.Q.value = 0.9; pres.gain.value = 2.0;
+    const ess = off.createBiquadFilter(); ess.type = "peaking"; ess.frequency.value = 7500; ess.Q.value = 2.0; ess.gain.value = -2.0;
+    const pre = off.createGain(); pre.gain.value = fromDb(preDb);
+    const comp = off.createDynamicsCompressor();
+    comp.threshold.value = -26; comp.knee.value = 8; comp.ratio.value = 3.5;
+    comp.attack.value = 0.015; comp.release.value = 0.2;
+    src.connect(hp); hp.connect(mud); mud.connect(pres); pres.connect(ess); ess.connect(pre); pre.connect(comp); comp.connect(off.destination);
+    src.start(0);
+    const dur = x.length / sr;
+    if (onProgress && off.suspend) {
+      for (let f = 1; f < 8; f++) {
+        const at = Math.floor((dur * f / 8) * sr / 128) * 128 / sr;
+        if (at <= 0 || at >= dur) continue;
+        off.suspend(at).then(() => { onProgress(0.1 + 0.75 * f / 8); off.resume(); }).catch(() => {});
+      }
+    }
+    const rendered = await off.startRendering();
+    const y = new Float32Array(rendered.getChannelData(0));
+    const lufs = gatedLoudness(y, sr);
+    let gainDb = Math.max(-24, Math.min(30, POLISH_TARGET_LOUDNESS - lufs));
+    // Don't let the limiter do more than ~4 dB of work on the loud bits (it
+    // would sound squashed): spiky takes land a little under the target instead.
+    const absSorted = [];
+    for (let i = 0; i < y.length; i += 7) absSorted.push(Math.abs(y[i]));
+    absSorted.sort((a, b) => a - b);
+    const p999 = Math.max(1e-6, percentile(absSorted, 0.999));
+    const maxGainDb = dB(POLISH_CEILING) + 4 - dB(p999);
+    let headroomCapped = false;
+    if (gainDb > maxGainDb) { gainDb = maxGainDb; headroomCapped = true; }
+    const g = fromDb(gainDb);
+    for (let i = 0; i < y.length; i++) y[i] *= g;
+    const limited = limitPeaks(y, sr, POLISH_CEILING);
+    let outPeak = 0; for (let i = 0; i < y.length; i++) { const a = Math.abs(y[i]); if (a > outPeak) outPeak = a; }
+    const finalLoud = gatedLoudness(y, sr);
+    if (onProgress) onProgress(1);
+    const info = `noise ${dB(st.floor).toFixed(0)} dB, voice ${dB(st.speech).toFixed(0)} dB → ${finalLoud.toFixed(1)} dB loudness, peak ${dB(outPeak).toFixed(1)} dB`;
+    diag(`polish: input peak ${dB(st.peak).toFixed(1)} dB, noise floor ${dB(st.floor).toFixed(1)} dB, voice ${dB(st.speech).toFixed(1)} dB, voice ${(st.activeFrac * 100).toFixed(0)}% of take; gate ${dB(gated.gateThr).toFixed(1)} dB (max -12 dB); pre-gain ${preDb.toFixed(1)} dB; comp 3.5:1 @ -26 dB; loudness ${lufs.toFixed(1)} → ${finalLoud.toFixed(1)} (target ${POLISH_TARGET_LOUDNESS}${headroomCapped ? ", held back to avoid over-limiting" : ""}); limiter >1 dB on ${(limited * 100).toFixed(1)}% of samples; out peak ${dB(outPeak).toFixed(2)} dBFS; ${Math.round(performance.now() - t0)} ms`);
+    return { buffer: makeBuffer(y, sr), info, stats: { inPeak: st.peak, floor: st.floor, speech: st.speech, lufsIn: lufs, lufsOut: finalLoud, outPeak, preDb, gainDb } };
+  }
+
+  // raw take -> (Polish) -> base -> (octave shift) -> what plays
+  async function rebuildChain(track) {
+    const raw = rawOf(track);
+    if (!raw) return;
+    const token = (track.chainToken = (track.chainToken || 0) + 1);
+    track.busy = true;
+    let base = raw;
+    if (track.polish && !track.prePolished) {
+      if (track.polishedBuffer === undefined) {
+        track.busyText = "polishing…";
+        renderTracks();
+        try {
+          const res = await polishBuffer(raw, (p) => {
+            track.busyText = `polishing… ${Math.round(p * 100)}%`;
+            const el = ui.trackList.querySelector(`.track[data-id="${track.id}"] .oct-busy`);
+            if (el) el.textContent = track.busyText;
+          });
+          track.polishedBuffer = res.buffer;
+          track.polishInfo = res.info;
+          track.polishStats = res.stats || null;
+        } catch (e) {
+          diag(`polish failed: ${e && e.name} ${e && e.message}; playing the raw take`);
+          track.polishedBuffer = null;
+          track.polishInfo = "polish failed, raw take";
+        }
+      }
+      if (track.polishedBuffer) base = track.polishedBuffer;
+    }
+    if (token !== track.chainToken) return;
+    if (track.baseBuffer !== base) { track.baseBuffer = base; track.shiftCache = {}; }
+    track.wavCache = null;
+    track.peak = bufferPeak(base);
+    if (track.octave) {
+      track.busyText = "processing…";
+      renderTracks();
+      try {
+        const b = await renderShifted(track, track.octave);
+        if (token === track.chainToken) track.buffer = b;
+      } catch (e) {
+        diag(`pitch failed: ${e && e.name}`);
+        track.octave = 0;
+        track.buffer = base;
+      }
+    } else {
+      track.buffer = base;
+    }
+    if (token !== track.chainToken) return;
+    track.busy = false;
+    renderTracks();
+  }
+
+  async function setPolish(track, on) {
+    track.polish = !!on;
+    diag(`polish ${on ? "ON" : "OFF"} for "${track.name}"`);
+    await rebuildChain(track);
+    if (state.transport === "playing") setStatus("Polish change applies the next time you tap Play.", "is-playing");
+    persistAfterEdit("polish");
+  }
 
   async function renderShifted(track, octaves) {
     const base = baseBufferOf(track);
@@ -2445,31 +2694,10 @@ self.onmessage = (e) => {
 
   async function setOctave(track, octaves) {
     const k = Math.max(-2, Math.min(2, Math.round(octaves)));
-    if (!baseBufferOf(track)) return;
+    if (!rawOf(track)) return;
     if (!track.baseBuffer) track.baseBuffer = track.buffer;
     track.octave = k;
-    track.wavCache = null;
-    if (k === 0) {
-      track.buffer = track.baseBuffer;
-      track.busy = false;
-      renderTracks();
-      persistAfterEdit("octave");
-      return;
-    }
-    track.busy = true;
-    track.busyText = "processing…";
-    renderTracks();
-    try {
-      const buf = await renderShifted(track, k);
-      if (track.octave === k) track.buffer = buf;
-    } catch (e) {
-      diag(`pitch failed: ${e && e.name} ${e && e.message}`);
-      track.octave = 0;
-      track.buffer = track.baseBuffer;
-      setStatus("Could not shift that take.");
-    }
-    track.busy = false;
-    renderTracks();
+    await rebuildChain(track);
     if (state.transport === "playing") setStatus("Octave change applies the next time you tap Play.", "is-playing");
     persistAfterEdit("octave");
   }
@@ -2491,6 +2719,9 @@ self.onmessage = (e) => {
         blob: makeWavBlob(buf.getChannelData(0), buf.sampleRate),
         buffer: buf,
         baseBuffer: buf,
+        rawBuffer: buf,
+        polish: false,
+        prePolished: !!(track.prePolished || (track.polish && track.polishedBuffer)),
         peak: bufferPeak(buf),
         mimeType: "audio/wav",
         volume: Math.round((track.volume || 1) * 0.8 * 100) / 100,
@@ -2594,7 +2825,7 @@ self.onmessage = (e) => {
   }
 
   function alignTracks(onlyTrack) {
-    const withOnset = state.tracks.map((t) => ({ t, on: detectOnset(baseBufferOf(t)) }));
+    const withOnset = state.tracks.map((t) => ({ t, on: detectOnset(rawOf(t)) }));
     const ref = withOnset.find((x) => x.on);
     if (!ref) { setStatus("No clear vocal start found to align to."); return 0; }
     const refTimeline = ref.on.sec - trackOffsetSec(ref.t);
@@ -2605,7 +2836,7 @@ self.onmessage = (e) => {
       let alignSec = on.sec - (t.latencyOffsetMs || 0) / 1000 - refTimeline;
       let how = "onset";
       try {
-        const xc = xcorrLag(baseBufferOf(ref.t), ref.on.sec, baseBufferOf(t), on.sec, 0.06);
+        const xc = xcorrLag(rawOf(ref.t), ref.on.sec, rawOf(t), on.sec, 0.06);
         if (xc.conf > 0.8 && Math.abs(xc.lagSec) <= 0.05) { alignSec += xc.lagSec; how = `onset+xcorr (conf ${xc.conf.toFixed(2)})`; }
       } catch (_) { /* onset only */ }
       const ms = Math.max(-3000, Math.min(3000, Math.round(alignSec * 1000)));
@@ -2730,7 +2961,7 @@ self.onmessage = (e) => {
     ui.trackList.innerHTML = "";
     ui.emptyTracks.hidden = state.tracks.length > 0;
     state.tracks.forEach((track) => {
-      const canShift = !!baseBufferOf(track) && !track.busy;
+      const canShift = !!rawOf(track) && !track.busy;
       const el = document.createElement("article");
       el.className = "track";
       el.dataset.id = track.id;
@@ -2744,6 +2975,11 @@ self.onmessage = (e) => {
         </div>
         <canvas class="wave" aria-hidden="true"></canvas>
         <div class="track-tools">
+          <span class="tool-group">
+            <span>Polish</span>
+            <label class="diag-toggle" style="margin:0"><input type="checkbox" class="polish-toggle" ${track.polish || track.prePolished ? "checked" : ""} ${rawOf(track) && !track.busy && !track.prePolished ? "" : "disabled"}> ${track.prePolished ? "from source" : "on"}</label>
+            <span class="polish-info" style="color:var(--muted)">${track.polish && track.polishInfo ? escapeAttr(track.polishInfo) : ""}</span>
+          </span>
           <span class="tool-group">
             <span>Octave</span>
             <button type="button" class="btn btn-tiny oct-down" ${canShift && (track.octave || 0) > -2 ? "" : "disabled"}>8va ↓</button>
@@ -2800,6 +3036,7 @@ self.onmessage = (e) => {
         if (track.blob) playBlobPlain(mediaBlobFor(track), `media "${track.name}"`);
       });
       el.querySelector(".btn-del").addEventListener("click", () => deleteTrack(track.id));
+      el.querySelector(".polish-toggle").addEventListener("change", (e) => setPolish(track, e.target.checked));
       el.querySelector(".oct-up").addEventListener("click", () => setOctave(track, (track.octave || 0) + 1));
       el.querySelector(".oct-down").addEventListener("click", () => setOctave(track, (track.octave || 0) - 1));
       el.querySelector(".oct-reset").addEventListener("click", () => setOctave(track, 0));
@@ -2925,6 +3162,8 @@ self.onmessage = (e) => {
         latencyOffsetMs: t.latencyOffsetMs,
         alignMs: t.alignMs || 0,
         octave: t.octave || 0,
+        polish: !!t.polish,
+        prePolished: !!t.prePolished,
         reverbSend: t.reverbSend,
         delaySend: t.delaySend,
         mimeType: t.mimeType,
@@ -2953,6 +3192,9 @@ self.onmessage = (e) => {
         latencyOffsetMs: Number.isFinite(row.latencyOffsetMs) ? row.latencyOffsetMs : 0,
         alignMs: Number.isFinite(row.alignMs) ? row.alignMs : 0,
         octave: 0,
+        rawBuffer: buffer,
+        polish: !!row.polish && !!buffer,
+        prePolished: !!row.prePolished,
         pendingOctave: Number.isFinite(row.octave) && buffer ? Math.max(-2, Math.min(2, Math.round(row.octave))) : 0,
         reverbSend: Number.isFinite(row.reverbSend) ? row.reverbSend : 0.35,
         delaySend: Number.isFinite(row.delaySend) ? row.delaySend : 0.2,
@@ -2963,17 +3205,10 @@ self.onmessage = (e) => {
 
   function restoreOctaves() {
     for (const t of state.tracks) {
-      const k = t.pendingOctave;
+      const k = t.pendingOctave || 0;
       delete t.pendingOctave;
-      if (k) {
-        t.baseBuffer = t.buffer;
-        t.octave = k;
-        t.busy = true;
-        t.busyText = "processing…";
-        renderShifted(t, k).then((buf) => {
-          if (t.octave === k) t.buffer = buf;
-        }).catch(() => { t.octave = 0; }).finally(() => { t.busy = false; renderTracks(); });
-      }
+      t.octave = k;
+      if (k || t.polish) rebuildChain(t);
     }
   }
 
@@ -3254,6 +3489,9 @@ self.onmessage = (e) => {
         alignMs: t.alignMs || 0,
         octave: t.octave || 0,
         busy: !!t.busy,
+        polish: !!t.polish,
+        polished: !!(t.polish && t.polishedBuffer && t.baseBuffer === t.polishedBuffer),
+        polishStats: t.polishStats || null,
         reverbSend: t.reverbSend,
         delaySend: t.delaySend,
         mimeType: t.mimeType,
@@ -3455,6 +3693,13 @@ self.onmessage = (e) => {
     diag(`page loaded. userAgent: ${navigator.userAgent}`);
     state.monitorMode = lsGet(MON_KEY) === "earbuds" ? "earbuds" : "speaker";
     state.autoAlignNew = lsGet("revamped-reverb.autoAlignNew") !== "0";
+    state.phoneProcessing = lsGet("revamped-reverb.phoneProcessing") === "1";
+    ui.phoneProcessing.checked = state.phoneProcessing;
+    ui.phoneProcessing.addEventListener("change", () => {
+      state.phoneProcessing = ui.phoneProcessing.checked;
+      lsSet("revamped-reverb.phoneProcessing", state.phoneProcessing ? "1" : "0");
+      diag(`phone processing ${state.phoneProcessing ? "ON (autoGainControl + noiseSuppression requested)" : "OFF (raw mic)"}; applies to the next take`);
+    });
     ui.autoAlignNew.checked = state.autoAlignNew;
     renderMonitor();
     diag(`monitor mode: ${state.monitorMode} (${lsGet(MON_USER_KEY) === "1" ? "your saved choice" : "default"})`);
@@ -3479,6 +3724,12 @@ self.onmessage = (e) => {
         renderTracks();
       },
       alignAll() { const n = alignTracks(null); renderTracks(); return n; },
+      async polishSamples(samples, sampleRate) {
+        const r = await polishBuffer(makeBuffer(new Float32Array(samples), sampleRate));
+        return { stats: r.stats, out: r.buffer ? Array.from(r.buffer.getChannelData(0)) : null };
+      },
+      async setPolish(i, on) { await setPolish(state.tracks[i], on); return snapshotForTest(); },
+      micConstraints() { return micConstraints(); },
       trackBuffer(i) { const b = state.tracks[i] && state.tracks[i].buffer; return b ? Array.from(b.getChannelData(0)) : null; },
       async importPayload(data) {
         await applySessionData(data, "Imported session");
