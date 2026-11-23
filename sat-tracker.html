@@ -157,6 +157,39 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
   .zoombar button { width: 44px; height: 44px; }
 }
 
+.viewToggle {
+  display: flex; border-radius: 10px; overflow: hidden;
+  border: 1px solid var(--stroke);
+  background: var(--panel);
+}
+.viewToggle button {
+  width: auto; height: 32px; min-width: 54px; padding: 0 8px;
+  border: 0; border-radius: 0; font-size: 11px; letter-spacing: .04em;
+  text-transform: uppercase; background: transparent; color: var(--muted);
+}
+.viewToggle button[aria-pressed="true"] {
+  background: rgba(126,184,255,.22); color: var(--text);
+}
+.zoombar .viewToggle { margin-bottom: 4px; }
+.zoombar .viewToggle button { width: 44px; min-width: 0; height: 28px; font-size: 9px; padding: 0 2px; }
+.other-break {
+  margin: 2px 0 8px 28px; font-size: 10px; color: var(--muted); line-height: 1.45;
+}
+.other-note { margin: 6px 0 0; font-size: 10px; color: var(--muted); line-height: 1.4; }
+.card { max-height: calc(100% - 150px); overflow: auto; }
+.card dd.multiline { line-height: 1.35; }
+.card .muted { color: var(--muted); font-weight: 400; }
+@media (max-width: 680px) {
+  .card { max-height: 42vh; }
+  .zoombar .viewToggle { width: 44px; flex-direction: column; }
+  .zoombar .viewToggle button { width: 44px; height: 26px; }
+}
+
+#ui.card-open .zoombar { right: 310px; }
+@media (max-width: 680px) {
+  #ui.card-open .zoombar { right: 12px; top: 132px; }
+}
+
   </style>
 </head>
 <body>
@@ -174,9 +207,13 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
     <aside class="panel" id="panel">
       <h2>Filters</h2>
       <div id="filters"></div>
-      <p class="credit">Orbit data from <a href="https://celestrak.org/NORAD/elements/" target="_blank" rel="noopener">CelesTrak</a> (GP, updated ~every 2 hours). Propagated with <a href="https://github.com/shashwatak/satellite-js" target="_blank" rel="noopener">satellite.js</a> (MIT). Not for operational use.</p>
+      <p class="credit">Orbit data from <a href="https://celestrak.org/NORAD/elements/" target="_blank" rel="noopener">CelesTrak</a> (GP, updated ~every 2 hours). Propagated with <a href="https://github.com/shashwatak/satellite-js" target="_blank" rel="noopener">satellite.js</a> (MIT). Globe imagery: NASA Blue Marble / Visible Earth. Not for operational use.</p>
     </aside>
     <div class="zoombar" id="zoombar">
+      <div class="viewToggle" id="viewToggle" role="radiogroup" aria-label="Earth view">
+        <button type="button" id="viewSphere" aria-pressed="true" title="Plain sphere">Sphere</button>
+        <button type="button" id="viewGlobe" aria-pressed="false" title="Realistic globe">Globe</button>
+      </div>
       <button type="button" id="zoomIn" title="Zoom in" aria-label="Zoom in">+</button>
       <button type="button" id="zoomOut" title="Zoom out" aria-label="Zoom out">−</button>
       <button type="button" id="zoomReset" title="Reset view" aria-label="Reset view">Reset</button>
@@ -187,6 +224,13 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
       <h3 id="cardName">—</h3>
       <dl>
         <dt>NORAD ID</dt><dd id="cardId">—</dd>
+        <dt>Int'l designator</dt><dd id="cardDesig">—</dd>
+        <dt>Launch</dt><dd id="cardLaunch">—</dd>
+        <dt>Time in orbit</dt><dd id="cardAge">—</dd>
+        <dt>Purpose</dt><dd id="cardPurpose" class="multiline">—</dd>
+        <dt>Type</dt><dd id="cardType">—</dd>
+        <dt>Owner</dt><dd id="cardOwner" class="multiline">—</dd>
+        <dt>Orbit</dt><dd id="cardOrbit" class="multiline">—</dd>
         <dt>Altitude</dt><dd id="cardAlt">—</dd>
         <div id="cardSlantRow">
           <dt>Slant range</dt><dd id="cardSlant">—</dd>
@@ -194,6 +238,8 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
         <dt>Radius</dt><dd id="cardR">—</dd>
         <dt>Group</dt><dd id="cardGroup">—</dd>
       </dl>
+      <p id="cardOtherHint" class="other-note" style="display:none"></p>
+      <p id="cardSatcatStatus" class="muted" style="margin:6px 0 0;font-size:11px;"></p>
       <div class="card-actions">
         <button type="button" id="zoomToBtn">Zoom to</button>
         <button type="button" id="useLocBtn">Distance from me</button>
@@ -483,6 +529,411 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
     return viewRadius < 14000;
   }
 
+  const EARTH_VIEW_KEY = "sat-tracker-earth-view";
+  const SATCAT_URL = "https://celestrak.org/satcat/records.php";
+  const TEXTURE_LOCAL = "earth-blue-marble.jpg";
+  const TEXTURE_CDN = "https://cdn.jsdelivr.net/npm/three-globe@2.45.6/example/img/earth-blue-marble.jpg";
+  const TEXTURE_CDN2 = "https://unpkg.com/three-globe@2.45.6/example/img/earth-blue-marble.jpg";
+
+  // Official CelesTrak SATCAT source/ownership codes: https://celestrak.org/satcat/sources.php
+  const SATCAT_OWNERS = {
+    AB: "Arab Satellite Communications Organization", ABS: "Asia Broadcast Satellite",
+    AC: "Asia Satellite Telecommunications Company (ASIASAT)", ALG: "Algeria",
+    ANG: "Angola", ARGN: "Argentina", ARM: "Republic of Armenia", ASRA: "Austria",
+    AUS: "Australia", AZER: "Azerbaijan", BEL: "Belgium", BELA: "Belarus",
+    BERM: "Bermuda", BGD: "Peoples Republic of Bangladesh", BHR: "The Kingdom of Bahrain",
+    BHUT: "The Kingdom of Bhutan", BOL: "Bolivia", BRAZ: "Brazil", BUL: "Bulgaria",
+    BWA: "Republic of Botswana", CA: "Canada", CHBZ: "China/Brazil", CHTU: "China/Türkiye",
+    CHLE: "Chile", CIS: "Commonwealth of Independent States (former USSR)", COL: "Colombia",
+    CRI: "Republic of Costa Rica", CZCH: "Czech Republic (former Czechoslovakia)",
+    DEN: "Denmark", DJI: "Republic of Djibouti", ECU: "Ecuador", EGYP: "Egypt",
+    ESA: "European Space Agency", ESRO: "European Space Research Organization",
+    EST: "Estonia", ETH: "Ethiopia",
+    EUME: "European Organization for the Exploitation of Meteorological Satellites (EUMETSAT)",
+    EUTE: "European Telecommunications Satellite Organization (EUTELSAT)",
+    FGER: "France/Germany", FIN: "Finland", FR: "France", FRIT: "France/Italy",
+    GER: "Germany", GHA: "Republic of Ghana", GLOB: "Globalstar", GREC: "Greece",
+    GRSA: "Greece/Saudi Arabia", GUAT: "Guatemala", HRV: "Republic of Croatia",
+    HUN: "Hungary", IM: "International Mobile Satellite Organization (INMARSAT)",
+    IND: "India", INDO: "Indonesia", IRAN: "Iran", IRAQ: "Iraq", IRID: "Iridium",
+    IRL: "Ireland", ISRA: "Israel", ISRO: "Indian Space Research Organisation",
+    ISS: "International Space Station", IT: "Italy",
+    ITSO: "International Telecommunications Satellite Organization (INTELSAT)",
+    JPN: "Japan", KAZ: "Kazakhstan", KEN: "Republic of Kenya", LAOS: "Laos",
+    LKA: "Democratic Socialist Republic of Sri Lanka", LTU: "Lithuania",
+    LUXE: "Luxembourg", MA: "Morocco", MALA: "Malaysia", MCO: "Principality of Monaco",
+    MDA: "Republic of Moldova", MEX: "Mexico", MMR: "Republic of the Union of Myanmar",
+    MNE: "Montenegro", MNG: "Mongolia", MUS: "Mauritius",
+    NATO: "North Atlantic Treaty Organization", NETH: "Netherlands", NICO: "New ICO",
+    NIG: "Nigeria", NKOR: "Democratic People's Republic of Korea", NOR: "Norway",
+    NPL: "Federal Democratic Republic of Nepal", NZ: "New Zealand",
+    O3B: "O3b Networks", ORB: "ORBCOMM", PAKI: "Pakistan", PERU: "Peru", POL: "Poland",
+    POR: "Portugal", PRC: "People's Republic of China", PRY: "Republic of Paraguay",
+    PRES: "People's Republic of China / European Space Agency", QAT: "State of Qatar",
+    RASC: "RascomStar-QAF", ROC: "Taiwan (Republic of China)", ROM: "Romania",
+    RP: "Philippines (Republic of the Philippines)", RWA: "Republic of Rwanda",
+    SAFR: "South Africa", SAUD: "Saudi Arabia", SDN: "Republic of Sudan",
+    SEAL: "Sea Launch", SEN: "Republic of Senegal", SES: "SES",
+    SGJP: "Singapore/Japan", SING: "Singapore", SKOR: "Republic of Korea",
+    SLB: "Solomon Islands", SPN: "Spain", STCT: "Singapore/Taiwan", SVN: "Slovenia",
+    SWED: "Sweden", SWTZ: "Switzerland", TBD: "To Be Determined", THAI: "Thailand",
+    TMMC: "Turkmenistan/Monaco", TUN: "Republic of Tunisia", TURK: "Türkiye",
+    UAE: "United Arab Emirates", UK: "United Kingdom", UKR: "Ukraine", UNK: "Unknown",
+    URY: "Uruguay", US: "United States", USBZ: "United States/Brazil",
+    VAT: "Vatican City State", VENZ: "Venezuela", VTNM: "Vietnam",
+    ZWE: "Republic of Zimbabwe"
+  };
+
+  // Official SATCAT OBJECT_TYPE values: https://celestrak.org/satcat/satcat-format.php
+  const SATCAT_TYPES = { PAY: "Payload", "R/B": "Rocket body", DEB: "Debris", UNK: "Unknown" };
+
+  let earthView = "sphere";
+  try { if (localStorage.getItem(EARTH_VIEW_KEY) === "globe") earthView = "globe"; } catch (_) {}
+  let globeReady = false;
+  let globeFailed = false;
+  let globe = null;
+  let globeDirty = true;
+  let lastGlobeKey = "";
+  const satcatMem = new Map();
+  let satcatPending = null;
+  let otherCounts = { deb: 0, rb: 0, plat: 0, uncat: 0 };
+
+  function catalogNameKind(name) {
+    const n = String(name || "").toUpperCase();
+    if (/\bDEB\b/.test(n)) return "deb";
+    if (/\bR\/B\b/.test(n)) return "rb";
+    if (/\bPLAT\b/.test(n)) return "plat";
+    return "uncat";
+  }
+
+  function ownerLabel(code) {
+    if (!code) return null;
+    const c = String(code).trim().toUpperCase();
+    if (!c) return null;
+    const name = SATCAT_OWNERS[c];
+    return name ? name + " (" + c + ")" : c;
+  }
+
+  function typeLabel(code) {
+    if (!code) return null;
+    return SATCAT_TYPES[code] || null;
+  }
+
+  function orbitClassFromElements(mm, ecc, inclDeg, altKm) {
+    const n = Number(mm), e = Number(ecc), inc = Number(inclDeg);
+    if (Number.isFinite(e) && e >= 0.25) return "Highly elliptical orbit";
+    if (Number.isFinite(n) && n > 0.9 && n < 1.15) {
+      if (Number.isFinite(e) && e < 0.05 && Number.isFinite(inc) && Math.abs(inc) < 15) {
+        return "Geostationary / geosynchronous orbit";
+      }
+      return "Geosynchronous orbit";
+    }
+    if (Number.isFinite(altKm)) {
+      if (altKm < 2000) return "Low Earth orbit (LEO)";
+      if (altKm < 35000) return "Medium Earth orbit (MEO)";
+      return "High Earth orbit";
+    }
+    if (Number.isFinite(n)) {
+      if (n > 5) return "Low Earth orbit (LEO)";
+      if (n > 1.5) return "Medium Earth orbit (MEO)";
+    }
+    return null;
+  }
+
+  function launchYearFromDesignator(objectId) {
+    const s = String(objectId || "").trim();
+    const m = /^(\d{4})-/.exec(s);
+    if (m) return Number(m[1]);
+    return null;
+  }
+
+  function formatLaunchDate(iso) {
+    if (!iso) return null;
+    const t = Date.parse(String(iso).length <= 10 ? iso + "T00:00:00Z" : iso);
+    if (!Number.isFinite(t)) return null;
+    try {
+      return new Intl.DateTimeFormat("en-US", {
+        timeZone: "UTC", year: "numeric", month: "short", day: "numeric",
+        timeZoneName: "short"
+      }).format(new Date(t));
+    } catch {
+      return iso;
+    }
+  }
+
+  function timeOnOrbit(iso, nowMs) {
+    if (!iso) return null;
+    const start = Date.parse(String(iso).length <= 10 ? iso + "T00:00:00Z" : iso);
+    if (!Number.isFinite(start)) return null;
+    const end = nowMs || Date.now();
+    if (end < start) return null;
+    const from = new Date(start);
+    const to = new Date(end);
+    let years = to.getUTCFullYear() - from.getUTCFullYear();
+    let ann = Date.UTC(from.getUTCFullYear() + years, from.getUTCMonth(), from.getUTCDate());
+    if (ann > end) {
+      years -= 1;
+      ann = Date.UTC(from.getUTCFullYear() + years, from.getUTCMonth(), from.getUTCDate());
+    }
+    const days = Math.floor((end - ann) / 86400000);
+    const yPart = years <= 0 ? null : (years + (years === 1 ? " year" : " years"));
+    const dPart = days + (days === 1 ? " day" : " days");
+    return yPart ? yPart + ", " + dPart : dPart;
+  }
+
+  function purposeText(meta, satcat) {
+    const typ = satcat && satcat.OBJECT_TYPE;
+    if (typ === "R/B") return "Rocket body (spent launch stage), from SATCAT object type. Not an active mission payload.";
+    if (typ === "DEB") return "Orbital debris, from SATCAT object type.";
+    if (typ === "UNK") {
+      const g = groupPurpose(meta);
+      return g ? "SATCAT object type is unknown. " + g : "Unknown.";
+    }
+    const g = groupPurpose(meta);
+    if (typ === "PAY") return g ? "Payload. " + g : "Payload (SATCAT). Specific mission is unknown.";
+    return g || "Unknown.";
+  }
+
+  function groupPurpose(meta) {
+    if (!meta) return null;
+    if (meta.group === "starlink") return "Broadband internet (Starlink group).";
+    if (meta.group === "oneweb") return "Broadband internet (OneWeb group).";
+    if (meta.group === "gnss") return "Satellite navigation (GPS/GNSS group).";
+    if (meta.group === "stations") {
+      const n = String(meta.name || "").toUpperCase();
+      if (/ISS|ZARYA|NAUKA|POISK|RASSVET|ZVEZDA/.test(n)) return "Crewed space station (International Space Station group).";
+      if (/TIANHE|WENTIAN|MENGTIAN|TIANGONG|\bCSS\b/.test(n)) return "Crewed space station (Tiangong / CSS group).";
+      if (/TIANZHOU|PROGRESS|SOYUZ|DRAGON|CYGNUS/.test(n)) return "Space station visiting vehicle (Stations group).";
+      return "Space station or visiting vehicle (Stations group).";
+    }
+    if (meta.group === "weather") return "Weather satellite (Weather group).";
+    if (meta.group === "commgeo") return "Communications (Communications / GEO group).";
+    if (meta.group === "science") return "Science or Earth observation (Science / Earth obs. group).";
+    return null;
+  }
+
+  function setText(id, value, allowBlank) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (value == null || value === "") el.textContent = allowBlank ? "" : "Unknown";
+    else el.textContent = value;
+  }
+
+  async function fetchSatcat(noradId) {
+    const id = Number(noradId);
+    if (!Number.isFinite(id)) return null;
+    if (satcatMem.has(id)) return satcatMem.get(id);
+    try {
+      const db = await idbOpen();
+      const cached = await new Promise((resolve, reject) => {
+        const tx = db.transaction("cache", "readonly");
+        const req = tx.objectStore("cache").get("satcat-" + id);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+      });
+      db.close();
+      if (cached && cached.record) {
+        satcatMem.set(id, cached.record);
+        return cached.record;
+      }
+    } catch (_) {}
+    const url = SATCAT_URL + "?CATNR=" + encodeURIComponent(String(id)) + "&FORMAT=JSON";
+    const res = await fetch(url, { cache: "no-store" });
+    const body = await res.text();
+    if (res.status === 403) throw new Error("CelesTrak SATCAT rate limit (HTTP 403). Try again later.");
+    if (!res.ok) throw new Error("SATCAT request failed (HTTP " + res.status + ").");
+    let data;
+    try { data = JSON.parse(body); } catch { throw new Error("SATCAT returned unreadable data."); }
+    const rec = Array.isArray(data) ? data[0] : data;
+    if (!rec) throw new Error("No SATCAT record for this object.");
+    satcatMem.set(id, rec);
+    try {
+      const db = await idbOpen();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction("cache", "readwrite");
+        tx.objectStore("cache").put({ record: rec, fetchedAt: Date.now() }, "satcat-" + id);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+    } catch (_) {}
+    return rec;
+  }
+
+  function initGlobeRenderer() {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1024;
+    canvas.height = 1024;
+    canvas.setAttribute("aria-hidden", "true");
+    canvas.style.cssText = "position:fixed;left:-4096px;top:0;width:1024px;height:1024px;pointer-events:none;opacity:0;";
+    document.body.appendChild(canvas);
+    const gl = canvas.getContext("webgl", { alpha: true, antialias: true, premultipliedAlpha: true, preserveDrawingBuffer: true });
+    if (!gl) return null;
+    const vs = "attribute vec3 aPos; uniform vec3 uRight,uUp,uCam; varying vec3 vPos; void main(){" +
+      "vPos=aPos; float vx=dot(aPos,uRight); float vy=dot(aPos,uUp); float vz=dot(aPos,uCam);" +
+      "gl_Position=vec4(vx,vy,0.5-0.5*vz,1.0);}";
+    const fs = "precision mediump float; varying vec3 vPos; uniform sampler2D uTex; uniform vec3 uSun; uniform float uLit;" +
+      "void main(){ vec3 n=normalize(vPos); float lon=atan(n.y,n.x); float lat=asin(clamp(n.z,-1.0,1.0));" +
+      "float u=lon/6.28318530718+0.5; float v=0.5-lat/3.14159265359;" +
+      "vec3 col=texture2D(uTex,vec2(u,v)).rgb; float diff=max(dot(n,uSun),0.0);" +
+      "float amb=0.10; float light=amb+0.95*diff; if(uLit<0.5) light=0.85;" +
+      "float night=smoothstep(-0.15,0.15,dot(n,uSun)); light=mix(0.07,light,night);" +
+      "float fres=pow(1.0-max(dot(n,vec3(0.0,0.0,1.0)),0.0),3.0);" +
+      "gl_FragColor=vec4(col*light,1.0);}";
+    function compile(type, src) {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        console.warn(gl.getShaderInfoLog(s));
+        return null;
+      }
+      return s;
+    }
+    const vsh = compile(gl.VERTEX_SHADER, vs);
+    const fsh = compile(gl.FRAGMENT_SHADER, fs);
+    if (!vsh || !fsh) return null;
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vsh);
+    gl.attachShader(prog, fsh);
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      console.warn(gl.getProgramInfoLog(prog));
+      return null;
+    }
+    const stacks = 48, slices = 96;
+    const verts = [];
+    const idx = [];
+    for (let i = 0; i <= stacks; i++) {
+      const phi = i / stacks * Math.PI;
+      const z = Math.cos(phi), r = Math.sin(phi);
+      for (let j = 0; j <= slices; j++) {
+        const th = j / slices * Math.PI * 2;
+        verts.push(r * Math.cos(th), r * Math.sin(th), z);
+      }
+    }
+    for (let i = 0; i < stacks; i++) {
+      for (let j = 0; j < slices; j++) {
+        const a = i * (slices + 1) + j;
+        const b = a + slices + 1;
+        idx.push(a, b, a + 1, a + 1, b, b + 1);
+      }
+    }
+    const vbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verts), gl.STATIC_DRAW);
+    const ibo = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), gl.STATIC_DRAW);
+    return { canvas, gl, prog, vbo, ibo, count: idx.length, loc: {
+      aPos: gl.getAttribLocation(prog, "aPos"),
+      uRight: gl.getUniformLocation(prog, "uRight"),
+      uUp: gl.getUniformLocation(prog, "uUp"),
+      uCam: gl.getUniformLocation(prog, "uCam"),
+      uSun: gl.getUniformLocation(prog, "uSun"),
+      uTex: gl.getUniformLocation(prog, "uTex"),
+      uLit: gl.getUniformLocation(prog, "uLit")
+    }, tex: null };
+  }
+
+  function bindGlobeTexture(img) {
+    if (!globe) return;
+    const gl = globe.gl;
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, img);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    globe.tex = tex;
+  }
+
+  function renderGlobe(date) {
+    if (!globe || !globe.tex) return false;
+    const key = yaw.toFixed(4) + "," + pitch.toFixed(4) + "," + Math.floor((date && date.getTime() || 0) / 30000);
+    if (!globeDirty && key === lastGlobeKey) return true;
+    const gl = globe.gl;
+    const sun = sunEcf(date || new Date(simTime));
+    gl.viewport(0, 0, globe.canvas.width, globe.canvas.height);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.CULL_FACE);
+    gl.cullFace(gl.BACK);
+    gl.useProgram(globe.prog);
+    gl.bindBuffer(gl.ARRAY_BUFFER, globe.vbo);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, globe.ibo);
+    gl.enableVertexAttribArray(globe.loc.aPos);
+    gl.vertexAttribPointer(globe.loc.aPos, 3, gl.FLOAT, false, 0, 0);
+    gl.uniform3f(globe.loc.uRight, rx, ry, rz);
+    gl.uniform3f(globe.loc.uUp, ux, uy, uz);
+    gl.uniform3f(globe.loc.uCam, camX, camY, camZ);
+    gl.uniform3f(globe.loc.uSun, sun.x, sun.y, sun.z);
+    gl.uniform1f(globe.loc.uLit, 1);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, globe.tex);
+    gl.uniform1i(globe.loc.uTex, 0);
+    gl.drawElements(gl.TRIANGLES, globe.count, gl.UNSIGNED_SHORT, 0);
+    globe.lastError = gl.getError();
+    lastGlobeKey = key;
+    globeDirty = false;
+    return true;
+  }
+
+  function loadEarthTexture() {
+    return new Promise((resolve) => {
+      const tryUrl = (url, next) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => resolve(img);
+        img.onerror = () => { if (next) next(); else resolve(null); };
+        img.src = url;
+      };
+      tryUrl(TEXTURE_LOCAL, () => tryUrl(TEXTURE_CDN, () => tryUrl(TEXTURE_CDN2, () => resolve(null))));
+    });
+  }
+
+  async function ensureGlobe() {
+    if (globeReady) return true;
+    if (globeFailed) return false;
+    globe = initGlobeRenderer();
+    if (!globe) { globeFailed = true; return false; }
+    const img = await loadEarthTexture();
+    if (!img) { globeFailed = true; return false; }
+    bindGlobeTexture(img);
+    globeReady = true;
+    globeDirty = true;
+    return true;
+  }
+
+  async function setEarthView(mode, userSet) {
+    const next = mode === "globe" ? "globe" : "sphere";
+    if (next === "globe") {
+      const okGlobe = await ensureGlobe();
+      if (!okGlobe) {
+        earthView = "sphere";
+        if (userSet) toast("The Earth texture could not be loaded, so the plain sphere is still showing.");
+        syncViewToggle();
+        return;
+      }
+    }
+    earthView = next;
+    globeDirty = true;
+    try { localStorage.setItem(EARTH_VIEW_KEY, earthView); } catch (_) {}
+    syncViewToggle();
+  }
+
+  function syncViewToggle() {
+    const a = document.getElementById("viewSphere");
+    const b = document.getElementById("viewGlobe");
+    if (a) a.setAttribute("aria-pressed", earthView === "sphere" ? "true" : "false");
+    if (b) b.setAttribute("aria-pressed", earthView === "globe" ? "true" : "false");
+  }
+
+
+
 
   function expandCompact(rows) {
     return rows.map((r) => ({
@@ -626,13 +1077,21 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
   }
 
   function buildMetas(records) {
+    otherCounts = { deb: 0, rb: 0, plat: 0, uncat: 0 };
     metas = records.map((r) => {
       const group = classify(r.OBJECT_NAME, r.MEAN_MOTION);
       counts[group] = (counts[group] || 0) + 1;
+      const kind = catalogNameKind(r.OBJECT_NAME);
+      if (group === "other") otherCounts[kind] = (otherCounts[kind] || 0) + 1;
       return {
         name: r.OBJECT_NAME,
         id: r.NORAD_CAT_ID,
+        objectId: r.OBJECT_ID || "",
+        meanMotion: r.MEAN_MOTION,
+        eccentricity: r.ECCENTRICITY,
+        inclination: r.INCLINATION,
         group,
+        nameKind: kind,
         color: GROUPS[GROUP_INDEX[group]].color,
         isIss: r.NORAD_CAT_ID === ISS_ID || /^ISS\b/.test(r.OBJECT_NAME)
       };
@@ -654,6 +1113,18 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
         if (selected >= 0 && metas[selected] && !enabled[metas[selected].group]) clearCard();
       });
       $filters.appendChild(row);
+      if (g.id === "other") {
+        const br = document.createElement("div");
+        br.className = "other-break";
+        br.innerHTML =
+          "Other is everything that is not in the groups above. This catalog is CelesTrak’s <em>active</em> objects, so it contains very little debris or spent stages.<br>" +
+          "Debris (DEB in the catalog name): " + (otherCounts.deb || 0).toLocaleString() + "<br>" +
+          "Rocket bodies (R/B): " + (otherCounts.rb || 0).toLocaleString() + "<br>" +
+          (otherCounts.plat ? "Platforms (PLAT): " + otherCounts.plat.toLocaleString() + "<br>" : "") +
+          "Uncategorized payloads or unidentified objects: " + (otherCounts.uncat || 0).toLocaleString() +
+          "<div class=\"other-note\">Name tags come from CelesTrak. Tap a satellite for its official SATCAT type, owner, and launch date.</div>";
+        $filters.appendChild(br);
+      }
     });
   }
 
@@ -931,6 +1402,7 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
     const rpx = Math.max(1, es.r);
     const sun = sunEcf(date);
     const sl = projectRaw(sun.x * EARTH_R, sun.y * EARTH_R, sun.z * EARTH_R);
+    const useGlobe = earthView === "globe" && globeReady && renderGlobe(date);
 
     // Atmosphere glow
     const glow = ctx.createRadialGradient(es.x, es.y, rpx * 0.92, es.x, es.y, rpx * 1.18);
@@ -947,31 +1419,34 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
     ctx.arc(es.x, es.y, rpx, 0, Math.PI * 2);
     ctx.clip();
 
-    ctx.fillStyle = "#071624";
-    ctx.fill();
+    if (useGlobe) {
+      ctx.drawImage(globe.canvas, es.x - rpx, es.y - rpx, rpx * 2, rpx * 2);
+    } else {
+      ctx.fillStyle = "#071624";
+      ctx.fill();
 
-    const lx = es.x + sl.vx * scale * 0.45;
-    const ly = es.y - sl.vy * scale * 0.45;
-    const day = ctx.createRadialGradient(lx, ly, rpx * 0.05, lx, ly, rpx * 1.45);
-    day.addColorStop(0, "rgba(186, 222, 232, 0.95)");
-    day.addColorStop(0.22, "rgba(62, 140, 150, 0.75)");
-    day.addColorStop(0.48, "rgba(16, 72, 108, 0.55)");
-    day.addColorStop(0.72, "rgba(6, 22, 48, 0.72)");
-    day.addColorStop(1, "rgba(1, 4, 14, 0.96)");
-    ctx.fillStyle = day;
-    ctx.fillRect(es.x - rpx - 2, es.y - rpx - 2, rpx * 2 + 4, rpx * 2 + 4);
+      const lx = es.x + sl.vx * scale * 0.45;
+      const ly = es.y - sl.vy * scale * 0.45;
+      const day = ctx.createRadialGradient(lx, ly, rpx * 0.05, lx, ly, rpx * 1.45);
+      day.addColorStop(0, "rgba(186, 222, 232, 0.95)");
+      day.addColorStop(0.22, "rgba(62, 140, 150, 0.75)");
+      day.addColorStop(0.48, "rgba(16, 72, 108, 0.55)");
+      day.addColorStop(0.72, "rgba(6, 22, 48, 0.72)");
+      day.addColorStop(1, "rgba(1, 4, 14, 0.96)");
+      ctx.fillStyle = day;
+      ctx.fillRect(es.x - rpx - 2, es.y - rpx - 2, rpx * 2 + 4, rpx * 2 + 4);
 
-    // Polar caps
-    drawCap(1);
-    drawCap(-1);
+      drawCap(1);
+      drawCap(-1);
+    }
 
-    // Graticule
+    // Graticule (faint over the globe so continents stay visible)
     ctx.lineWidth = Math.max(0.6, 1.0);
-    ctx.strokeStyle = "rgba(200, 230, 255, 0.22)";
-    drawParallel(0, true);
-    ctx.strokeStyle = "rgba(200, 230, 255, 0.12)";
+    ctx.strokeStyle = useGlobe ? "rgba(200, 230, 255, 0.10)" : "rgba(200, 230, 255, 0.22)";
+    drawParallel(0, !useGlobe);
+    ctx.strokeStyle = useGlobe ? "rgba(200, 230, 255, 0.06)" : "rgba(200, 230, 255, 0.12)";
     for (const lat of [-60, -30, 30, 60]) drawParallel(lat, false);
-    for (let lon = -150; lon <= 180; lon += 30) drawMeridian(lon, lon === 0);
+    for (let lon = -150; lon <= 180; lon += 30) drawMeridian(lon, !useGlobe && lon === 0);
     ctx.restore();
 
     // Limb highlight
@@ -1222,33 +1697,94 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
     return best;
   }
 
-  function showCard(i) {
-    selected = i;
+  function fillCardBasics(i, satcat) {
     const m = metas[i];
     currentPos(i, tmp);
     const r = Math.hypot(tmp[0], tmp[1], tmp[2]);
     const altNow = altOf(i);
-    document.getElementById("cardName").textContent = m.name;
-    document.getElementById("cardId").textContent = String(m.id);
-    document.getElementById("cardAlt").textContent = fmtAlt(altNow, false);
-    document.getElementById("cardGroup").textContent = GROUPS[GROUP_INDEX[m.group]].label;
-    document.getElementById("cardR").textContent = fmtKm(r);
+    setText("cardName", m.name);
+    setText("cardId", String(m.id));
+    setText("cardAlt", fmtAlt(altNow, false));
+    setText("cardR", fmtKm(r));
+    setText("cardGroup", GROUPS[GROUP_INDEX[m.group]].label);
     const slant = slantRangeOf(i);
     const slantRow = document.getElementById("cardSlantRow");
     if (slantRow) {
       if (slant != null) {
         slantRow.classList.add("on");
-        document.getElementById("cardSlant").textContent = fmtAlt(slant, false);
+        setText("cardSlant", fmtAlt(slant, false));
       } else {
         slantRow.classList.remove("on");
       }
     }
+    const orbit = orbitClassFromElements(m.meanMotion, m.eccentricity, m.inclination, altNow);
+    let orbitText = orbit || "Unknown";
+    if (satcat && (satcat.APOGEE != null && satcat.PERIGEE != null) && satcat.APOGEE !== "" && satcat.PERIGEE !== "") {
+      orbitText += " · SATCAT apogee " + Number(satcat.APOGEE).toLocaleString("en-US") +
+        " km / perigee " + Number(satcat.PERIGEE).toLocaleString("en-US") + " km";
+    }
+    if (satcat && satcat.ORBIT_TYPE === "DOC") orbitText += " · Docked (SATCAT)";
+    setText("cardOrbit", orbitText);
+
+    const designator = (satcat && satcat.OBJECT_ID) || m.objectId || null;
+    setText("cardDesig", designator);
+
+    setText("cardPurpose", purposeText(m, satcat));
+
+    if (satcat && satcat.LAUNCH_DATE) {
+      const launched = formatLaunchDate(satcat.LAUNCH_DATE);
+      const age = timeOnOrbit(satcat.LAUNCH_DATE, simTime);
+      setText("cardLaunch", launched || satcat.LAUNCH_DATE);
+      setText("cardAge", age || "Unknown");
+    } else {
+      const year = launchYearFromDesignator(designator);
+      setText("cardLaunch", year ? ("Launch year " + year + " (from international designator); exact date unknown") : "Unknown");
+      setText("cardAge", "Unknown");
+    }
+
+    if (satcat && satcat.OWNER) setText("cardOwner", ownerLabel(satcat.OWNER));
+    else setText("cardOwner", "Unknown");
+
+    const typ = satcat && typeLabel(satcat.OBJECT_TYPE);
+    setText("cardType", typ);
+
+    if (m.group === "other") {
+      const kind = m.nameKind;
+      const hint = kind === "deb" ? "Catalog name includes DEB (debris)."
+        : kind === "rb" ? "Catalog name includes R/B (rocket body)."
+        : kind === "plat" ? "Catalog name includes PLAT (platform)."
+        : "In the Other group because it is not in a named constellation or category.";
+      const el = document.getElementById("cardOtherHint");
+      if (el) { el.style.display = "block"; el.textContent = hint; }
+    } else {
+      const el = document.getElementById("cardOtherHint");
+      if (el) { el.style.display = "none"; el.textContent = ""; }
+    }
+  }
+
+  function showCard(i) {
+    selected = i;
+    fillCardBasics(i, satcatMem.get(metas[i].id) || null);
+    setText("cardSatcatStatus", satcatMem.has(metas[i].id) ? "" : "Loading catalog details…", true);
     $card.classList.add("visible");
+    document.getElementById("ui").classList.add("card-open");
+    satcatPending = (satcatPending || 0) + 1;
+    const req = satcatPending;
+    fetchSatcat(metas[i].id).then((rec) => {
+      if (selected !== i || req !== satcatPending) return;
+      fillCardBasics(i, rec);
+      setText("cardSatcatStatus", "", true);
+    }).catch((err) => {
+      if (selected !== i || req !== satcatPending) return;
+      setText("cardSatcatStatus", (err && err.message) ? err.message : "Catalog details unavailable.", true);
+    });
   }
 
   function clearCard() {
     selected = -1;
     $card.classList.remove("visible");
+    const ui = document.getElementById("ui");
+    if (ui) ui.classList.remove("card-open");
   }
 
   function midpointOfPointers() {
@@ -1367,6 +1903,12 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
   if ($zoomReset) $zoomReset.addEventListener("click", resetView);
   if ($zoomTo) $zoomTo.addEventListener("click", () => { if (selected >= 0) zoomToIndex(selected); });
   if ($useLoc) $useLoc.addEventListener("click", requestUserLocation);
+  const $viewSphere = document.getElementById("viewSphere");
+  const $viewGlobe = document.getElementById("viewGlobe");
+  if ($viewSphere) $viewSphere.addEventListener("click", () => setEarthView("sphere", true));
+  if ($viewGlobe) $viewGlobe.addEventListener("click", () => setEarthView("globe", true));
+  syncViewToggle();
+  if (earthView === "globe") setEarthView("globe", false);
   window.addEventListener("resize", resize);
 
   function requestUserLocation() {
@@ -1476,7 +2018,50 @@ button:not(:disabled):hover { background: rgba(126,184,255,.22); }
         if (i >= 0) { showCard(i); zoomToIndex(i); }
         return i;
       },
-      labelCount: function () { return viewRadius <= LABEL_RADIUS; }
+      labelCount: function () { return viewRadius <= LABEL_RADIUS; },
+      get earthView() { return earthView; },
+      setEarthView: function (mode) { return setEarthView(mode, true); },
+      get globeReady() { return globeReady; },
+      waitGlobe: function () { return ensureGlobe(); },
+      findById: function (norad) {
+        const id = Number(norad);
+        for (let i = 0; i < metas.length; i++) if (metas[i].id === id) return i;
+        return -1;
+      },
+      showById: function (norad) {
+        const i = this.findById(norad);
+        if (i >= 0) showCard(i);
+        return i;
+      },
+      satcat: function (norad) { return fetchSatcat(norad); },
+      globeDebug: function () {
+        if (!globe) return { missing: true };
+        renderGlobe(new Date(simTime));
+        const c = globe.canvas;
+        const tmp = document.createElement("canvas");
+        tmp.width = tmp.height = 256;
+        const x = tmp.getContext("2d");
+        x.drawImage(c, 0, 0, 256, 256);
+        const img = x.getImageData(128, 128, 1, 1).data;
+        const corner = x.getImageData(8, 8, 1, 1).data;
+        return {
+          lastError: globe.lastError,
+          hasTex: !!globe.tex,
+          center: [img[0], img[1], img[2], img[3]],
+          corner: [corner[0], corner[1], corner[2], corner[3]],
+          png: tmp.toDataURL("image/png")
+        };
+      },
+      setGroupsEnabled: function (on, only) {
+        GROUPS.forEach((g) => { enabled[g.id] = only ? only.indexOf(g.id) >= 0 : !!on; });
+        renderFilters();
+      },
+      cardText: function () {
+        const ids = ["cardName","cardId","cardLaunch","cardAge","cardPurpose","cardOwner","cardType","cardOrbit","cardAlt","cardGroup","cardDesig","cardSatcatStatus"];
+        const o = {};
+        ids.forEach((id) => { const el = document.getElementById(id); o[id] = el ? el.innerText : null; });
+        return o;
+      }
     };
   }
 
