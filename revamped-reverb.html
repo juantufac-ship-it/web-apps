@@ -639,6 +639,113 @@ input[type="range"] {
   display: none !important;
 }
 
+.meter-stack { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+.meter.input-meter .meter-fill { background: #7ad0a3; }
+.track-meter {
+  flex: 0 0 72px;
+  width: 72px;
+  height: 16px;
+  background: #161512;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+  align-self: center;
+}
+.track-meter-fill {
+  width: 0%;
+  height: 100%;
+  background: var(--gold);
+  transform-origin: left center;
+}
+ .btn-mute { min-width: 72px; }
+.metro-box {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg-track);
+}
+.btn-metro {
+  width: 100%;
+  min-height: 52px;
+  font-weight: 800;
+  font-size: 1.05rem;
+  background: #34322c;
+  color: var(--text);
+  border: 0;
+  border-radius: 12px;
+}
+.btn-metro.is-on {
+  background: var(--gold);
+  color: #1a140c;
+}
+.metro-hint { color: var(--muted); font-size: 0.88rem; margin: 0; }
+
+.latency-modes { margin: 6px 0; }
+.arranger-hint { color: var(--muted); font-size: 0.88rem; margin: 0 0 10px; }
+.arranger {
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: #161512;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  touch-action: pan-x pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+.arranger-inner { position: relative; min-height: 40px; }
+.arranger-ruler {
+  position: sticky; top: 0; height: 22px; z-index: 3;
+  background: #1c1a16; border-bottom: 1px solid var(--line);
+  color: var(--muted); font-size: 10px; pointer-events: none;
+}
+.arranger-row {
+  display: flex; align-items: stretch; min-height: 64px;
+  border-bottom: 1px solid var(--line);
+}
+.arranger-lane-meta {
+  flex: 0 0 96px; width: 96px; position: sticky; left: 0; z-index: 2;
+  background: #1c1a16; border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; justify-content: center; gap: 4px;
+  padding: 6px;
+}
+.arranger-lane-meta strong {
+  display: block; font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.arranger-lane {
+  position: relative; flex: 1 1 auto; min-height: 64px;
+  background: repeating-linear-gradient(90deg, transparent, transparent calc(var(--pps, 80px) - 1px), #2a2722 0, #2a2722 var(--pps, 80px));
+}
+.arr-clip {
+  position: absolute; top: 8px; height: 48px;
+  background: #2a241c; border: 2px solid #6a5a40; border-radius: 6px;
+  overflow: hidden; cursor: grab; touch-action: none;
+}
+.arr-clip.is-selected { border-color: var(--gold); box-shadow: 0 0 0 2px rgba(201,160,106,.35); z-index: 1; cursor: grabbing; }
+.arr-clip canvas { display: block; width: 100%; height: 100%; pointer-events: none; }
+.arr-clip .arr-trim {
+  position: absolute; top: 0; width: 22px; height: 100%;
+  background: rgba(201,160,106,.28); z-index: 2; display: none;
+  touch-action: none;
+}
+.arr-clip.is-selected .arr-trim { display: block; }
+.arr-clip .arr-trim.left { left: 0; cursor: ew-resize; border-radius: 4px 0 0 4px; }
+.arr-clip .arr-trim.right { right: 0; cursor: ew-resize; border-radius: 0 4px 4px 0; }
+.arr-offset-badge {
+  position: absolute; top: -18px; left: 50%; transform: translateX(-50%);
+  background: var(--gold); color: #1a140c; font: 700 11px/1.2 system-ui, sans-serif;
+  padding: 2px 6px; border-radius: 8px; white-space: nowrap; pointer-events: none; z-index: 4;
+}
+.arranger-playhead {
+  position: absolute; top: 0; bottom: 0; width: 2px; background: #ff6b4a;
+  z-index: 5; pointer-events: none; display: none;
+}
+.arranger-playhead.is-on { display: block; }
+.track-comp { color: var(--muted); font-size: 0.8rem; margin: 0 0 8px; }
+
   </style>
 </head>
 <body>
@@ -659,8 +766,12 @@ input[type="range"] {
       Microphone access needs HTTPS or localhost. Start a local server (see the README) and open this page from there.
     </p>
     <p id="status" class="status" aria-live="polite">Ready</p>
-    <p class="meter-label" id="meter-label">Output level</p>
-    <div class="meter" aria-hidden="true"><div id="meter-fill" class="meter-fill"></div></div>
+    <div class="meter-stack">
+      <p class="meter-label" id="meter-label">Output level</p>
+      <div class="meter" aria-hidden="true"><div id="meter-fill" class="meter-fill"></div></div>
+      <p class="meter-label" id="input-meter-label" hidden>Mic input</p>
+      <div class="meter input-meter" id="input-meter" hidden aria-hidden="true"><div id="input-meter-fill" class="meter-fill"></div></div>
+    </div>
     <p id="mic-alert" class="mic-alert" role="alert" hidden></p>
 
     <section class="panel transport" aria-label="Transport">
@@ -691,18 +802,48 @@ input[type="range"] {
           <select id="count-in">
             <option value="0">Off</option>
             <option value="2">2 beats</option>
-            <option value="4" selected>4 beats</option>
+            <option value="4">4 beats</option>
+            <option value="8">2 bars</option>
+            <option value="16">4 bars</option>
+            <option value="32" selected>8 bars</option>
           </select>
         </label>
         <label class="field">
           <span>Count-in BPM</span>
           <input id="bpm" type="number" min="40" max="240" step="1" value="120">
         </label>
-        <label class="field field-wide">
-          <span>Latency offset <em id="latency-label">80 ms</em></span>
-          <input id="latency" type="range" min="0" max="400" step="5" value="80">
-          <small>Trimmed from the start of each new take to line up with playback.</small>
-        </label>
+        <div class="metro-box" role="group" aria-label="Metronome">
+          <button type="button" id="btn-metro" class="btn-metro" aria-pressed="false">Metronome off</button>
+          <label class="field">
+            <span>Click volume <em id="click-vol-label">70%</em></span>
+            <input id="click-vol" type="range" min="0" max="100" step="1" value="70">
+          </label>
+          <label class="field">
+            <span>Time signature</span>
+            <select id="time-sig">
+              <option value="4" selected>4/4</option>
+              <option value="3">3/4</option>
+              <option value="2">2/4</option>
+              <option value="6">6/8</option>
+            </select>
+          </label>
+          <label class="diag-toggle"><input type="checkbox" id="metro-playback"> Also click during playback</label>
+          <p class="metro-hint">Use earbuds so the click isn't picked up by the mic.</p>
+        </div>
+        <div class="field field-wide" id="latency-panel">
+          <span>Latency offset <em id="latency-label">auto + 0 ms</em></span>
+          <span class="seg latency-modes" role="group" aria-label="Output for latency">
+            <button type="button" id="lat-speaker" aria-pressed="true">Speaker</button>
+            <button type="button" id="lat-wired" aria-pressed="false">Wired</button>
+            <button type="button" id="lat-bluetooth" aria-pressed="false">Bluetooth</button>
+          </span>
+          <input id="latency" type="range" min="-100" max="400" step="5" value="0" title="Extra offset added to the auto estimate for this output">
+          <small id="latency-hint">New takes are shifted earlier by the auto estimate plus this extra amount so they line up with what you hear. Nothing is cut. You can still drag a clip to line it up.</small>
+          <span class="tool-group">
+            <button type="button" id="btn-calibrate" class="btn btn-tiny">Calibrate…</button>
+            <span id="calibrate-status"></span>
+          </span>
+        </div>
       </div>
     </section>
 
@@ -766,11 +907,15 @@ input[type="range"] {
       <div class="tracks-head">
         <h2>Tracks</h2>
         <span class="tool-group">
-          <button type="button" id="btn-align" class="btn btn-tiny" title="Line every take up with the first one">Sync starts</button>
           <button type="button" id="btn-reset-offsets" class="btn btn-tiny" title="Set every take's offset back to 0 ms">Reset offsets</button>
         </span>
       </div>
-      <label class="diag-toggle"><input type="checkbox" id="auto-align-new" checked> Auto-align new takes</label>
+      <p class="arranger-hint" id="arranger-hint">All tracks: tap a clip to select it, then drag to line it up. Drag the ends to trim. No snapping. The small ms buttons below are for fine-tuning.</p>
+      <div class="tool-group" id="arranger-zoom" style="margin-bottom:8px">
+        <button type="button" id="arr-zoom-out" class="btn btn-tiny" title="Zoom out">−</button>
+        <button type="button" id="arr-zoom-in" class="btn btn-tiny" title="Zoom in">+</button>
+      </div>
+      <div id="arranger" class="arranger" hidden><div id="arranger-rows"></div></div>
       <div id="track-list" class="track-list"></div>
       <p id="empty-tracks" class="empty">No tracks yet. Hit Record to capture your first take.</p>
     </section>
@@ -824,6 +969,20 @@ input[type="range"] {
     bpm: $("bpm"),
     latency: $("latency"),
     latencyLabel: $("latency-label"),
+    latencyHint: $("latency-hint"),
+    latSpeaker: $("lat-speaker"),
+    latWired: $("lat-wired"),
+    latBluetooth: $("lat-bluetooth"),
+    calibrate: $("btn-calibrate"),
+    calibrateStatus: $("calibrate-status"),
+    inputMeter: $("input-meter"),
+    inputMeterFill: $("input-meter-fill"),
+    inputMeterLabel: $("input-meter-label"),
+    arranger: $("arranger"),
+    arrangerRows: $("arranger-rows"),
+    arrangerHint: $("arranger-hint"),
+    arrZoomIn: $("arr-zoom-in"),
+    arrZoomOut: $("arr-zoom-out"),
     reverbEnabled: $("reverb-enabled"),
     reverbMix: $("reverb-mix"),
     reverbMixLabel: $("reverb-mix-label"),
@@ -849,10 +1008,13 @@ input[type="range"] {
     meterFill: $("meter-fill"),
     meterLabel: $("meter-label"),
     micAlert: $("mic-alert"),
-    alignBtn: $("btn-align"),
     resetOffsets: $("btn-reset-offsets"),
     phoneProcessing: $("phone-processing"),
-    autoAlignNew: $("auto-align-new"),
+    metro: $("btn-metro"),
+    clickVol: $("click-vol"),
+    clickVolLabel: $("click-vol-label"),
+    timeSig: $("time-sig"),
+    metroPlayback: $("metro-playback"),
     monSpeaker: $("mon-speaker"),
     monEarbuds: $("mon-earbuds"),
     monHint: $("monitor-hint"),
@@ -873,15 +1035,24 @@ input[type="range"] {
     transport: "stopped", // stopped | counting | playing | recording
     playStartedAt: 0,
     raf: 0,
-    latencyMs: 80,
-    countInBeats: 4,
+    latencyMs: 0,
+    countInBeats: 32,
     bpm: 120,
     reverb: { enabled: true, mix: 0.25, decay: 2.0 },
     delay: { enabled: false, time: 0.28, feedback: 0.3, mix: 0.2 },
     useMediaPlayer: false,
     monitorMode: "speaker",
     phoneProcessing: false,
-    autoAlignNew: true,
+    metronomeOn: false,
+    metronomeOnPlayback: false,
+    clickVolume: 0.7,
+    beatsPerBar: 4,
+    latencyMode: "speaker",
+    latencyModePinned: false,
+    manualLatency: { speaker: 0, wired: 0, bluetooth: 0 },
+    arrangerPx: 80,
+    selectedTrackId: null,
+    clipDrag: null,
   };
 
   const engine = {
@@ -987,7 +1158,9 @@ input[type="range"] {
     state.monitorMode = mode === "earbuds" ? "earbuds" : "speaker";
     lsSet(MON_KEY, state.monitorMode);
     if (byUser) lsSet(MON_USER_KEY, "1");
+    if (!state.latencyModePinned) state.latencyMode = currentOutputMode();
     renderMonitor();
+    if (typeof syncLatencyUi === "function") syncLatencyUi();
     diag(`monitor mode: ${state.monitorMode}${byUser ? " (chosen by you)" : " (auto)"}; sinkId=${JSON.stringify(desiredSinkId())}`);
     applySinkEverywhere("monitor");
   }
@@ -1005,6 +1178,7 @@ input[type="range"] {
       const list = await navigator.mediaDevices.enumerateDevices();
       const outs = list.filter((d) => d.kind === "audiooutput");
       const isHeadset = (d) => HEADSET_RE.test(d.label || "") && !/earpiece/i.test(d.label || "");
+      engine.cachedDevices = list;
       outputs.list = outs;
       outputs.headset = outs.find((d) => isHeadset(d) && d.deviceId !== "default" && d.deviceId !== "communications")
         || outs.find(isHeadset) || null;
@@ -1017,6 +1191,7 @@ input[type="range"] {
         setMonitorMode("earbuds", false);
       } else {
         renderMonitor();
+        if (typeof syncLatencyUi === "function") syncLatencyUi();
         applySinkEverywhere("devicechange");
       }
     } catch (e) {
@@ -1163,8 +1338,8 @@ input[type="range"] {
     let max = 0;
     for (const t of state.tracks) {
       if (!t.buffer) continue;
-      const offset = trackOffsetSec(t);
-      max = Math.max(max, Math.max(0, t.buffer.duration - offset));
+      const { te, dur } = clipWindow(t);
+      max = Math.max(max, Math.max(0, (dur - te) - trackOffsetSec(t)));
     }
     return max;
   }
@@ -1194,6 +1369,8 @@ input[type="range"] {
     engine.reverbInput = null;
     engine.reverbOk = false;
     engine.trackNodes.clear();
+    engine.clockKeep = null;
+    engine.clickGain = null;
     engine.ctxStale = false;
     if (old && old.state !== "closed") old.close().catch(() => {});
   }
@@ -1218,20 +1395,15 @@ input[type="range"] {
 
     engine.master = ctx.createGain();
     engine.master.gain.value = 1;
-    // Master bus safety limiter so stacked harmonies don't clip.
+    // Transparent clip guard at -1 dBFS (waveshaper, no makeup, no pumping).
     try {
-      engine.busLimiter = ctx.createDynamicsCompressor();
-      engine.busLimiter.threshold.value = -3;
-      engine.busLimiter.knee.value = 2;
-      engine.busLimiter.ratio.value = 20;
-      engine.busLimiter.attack.value = 0.002;
-      engine.busLimiter.release.value = 0.12;
+      engine.busLimiter = makeClipGuard(ctx);
       engine.master.connect(engine.busLimiter);
       engine.busLimiter.connect(ctx.destination);
     } catch (err) {
       engine.busLimiter = null;
       engine.master.connect(ctx.destination);
-      diag(`bus limiter unavailable (${err && err.name}); master goes straight to the output`);
+      diag(`clip guard unavailable (${err && err.name}); master goes straight to the output`);
     }
     engine.meter = ctx.createAnalyser();
     engine.meter.fftSize = 1024;
@@ -1306,16 +1478,25 @@ input[type="range"] {
       for (const el of engine.mediaEls) {
         if (!el.paused && !el.ended && !el.muted) peak = Math.max(peak, 0.5 * el.volume);
       }
-      if (state.transport === "recording") peak = Math.max(peak, cap.livePeak);
       hold = Math.max(peak, hold * 0.9);
       ui.meterFill.style.width = `${Math.min(100, Math.round(Math.sqrt(hold) * 100))}%`;
+      const rec = state.transport === "recording" || state.transport === "counting";
+      if (ui.inputMeter) {
+        ui.inputMeter.hidden = !rec;
+        ui.inputMeterLabel.hidden = !rec;
+        if (rec) {
+          const ip = Math.max(cap.livePeak, cap.maxPeak * 0.2);
+          ui.inputMeterFill.style.width = `${Math.min(100, Math.round(Math.sqrt(Math.max(cap.livePeak, 0)) * 100))}%`;
+          ui.inputMeterLabel.textContent = `Mic input ${Math.round(cap.livePeak * 100)}% (max ${Math.round(cap.maxPeak * 100)}%)`;
+        }
+      }
+      updateTrackMeters();
+      updatePlayhead();
       if (state.transport === "playing" || state.transport === "recording" || state.transport === "counting") {
         if (engine.ctx && engine.ctx.state !== "running") {
           ui.meterLabel.textContent = "Output level: audio is paused by the browser. Tap Play again.";
         } else {
-          ui.meterLabel.textContent = state.transport === "recording"
-            ? `Mic level ${Math.round(cap.livePeak * 100)}% (max ${Math.round(cap.maxPeak * 100)}%)`
-            : (hold > 0.002 ? "Output level: sound is playing" : "Output level");
+          ui.meterLabel.textContent = hold > 0.002 ? "Output level: sound is playing" : "Output level";
         }
       }
       if (state.transport !== "stopped" || hold > 0.001) {
@@ -1544,28 +1725,30 @@ input[type="range"] {
 
     source.connect(vol);
     vol.connect(mute);
-    mute.connect(engine.dry);
-    mute.connect(revSend);
-    mute.connect(delSend);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    // In-line so the analyser is in the destination graph (a leaf analyser stays silent).
+    mute.connect(analyser);
+    analyser.connect(engine.dry);
+    analyser.connect(revSend);
+    analyser.connect(delSend);
     revSend.connect(engine.reverbInput);
     delSend.connect(engine.delayInput);
 
-    const dur = track.buffer.duration;
-    // Shared timeline: this take's time 0 plays at `when`. Positive offset =
-    // skip into the buffer, negative = start later.
-    let startAt = when + (offsetSec < 0 ? -offsetSec : 0);
-    let off = Math.max(0, offsetSec);
-    // If we're already past the scheduled time, start now but skip ahead by the
-    // same amount, so the take stays locked to the others instead of lagging.
+    const win = scheduleWindow(track, when);
+    if (!win) return null;
+    let startAt = win.startAt;
+    let off = win.bufStart;
     const now = ctx.currentTime;
     let late = 0;
     if (startAt < now) { late = now - startAt; off += late; startAt = now; }
-    off = Math.min(off, Math.max(0, dur - 0.001));
-    source.start(startAt, off);
+    const playDur = Math.max(0.001, win.dur - late);
+    if (off >= track.buffer.duration) return null;
+    source.start(startAt, off, playDur);
     source.onended = () => diag(`  source onended "${track.name}" at ctx ${f3(ctx.currentTime)}`);
     engine.sources.push(source);
-    engine.trackNodes.set(track.id, { source, vol, mute, revSend, delSend });
-    if (logs) logs.push(`  source.start(${startAt.toFixed(4)}, offset ${off.toFixed(4)}) "${track.name}" timeline offset ${(offsetSec * 1000).toFixed(1)} ms${late ? ` (scheduled late by ${(late * 1000).toFixed(1)} ms, compensated)` : ""} vol=${f3(vol.gain.value)} mute-gain=${mute.gain.value}`);
+    engine.trackNodes.set(track.id, { source, vol, mute, revSend, delSend, analyser });
+    if (logs) logs.push(`  source.start(${startAt.toFixed(4)}, offset ${off.toFixed(4)}, dur ${playDur.toFixed(4)}) "${track.name}" timeline offset ${(offsetSec * 1000).toFixed(1)} ms${late ? ` (scheduled late by ${(late * 1000).toFixed(1)} ms, compensated)` : ""} vol=${f3(vol.gain.value)} mute-gain=${mute.gain.value}`);
     return source;
   }
 
@@ -1607,7 +1790,23 @@ input[type="range"] {
 
   // Every track is scheduled against ONE start time. All buffers are ready
   // before this runs (no awaits, no per-track logging inside the loop).
+  function ensureClockRunning() {
+    const ctx = engine.ctx;
+    if (!ctx || engine.clockKeep) return;
+    try {
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      g.gain.value = 0;
+      osc.frequency.value = 1;
+      osc.connect(g);
+      g.connect(ctx.destination);
+      osc.start();
+      engine.clockKeep = osc;
+    } catch (_) { /* */ }
+  }
+
   function startPlaybackAt(when, mix) {
+    ensureClockRunning();
     const logs = [];
     const lateMedia = [];
     if (state.useMediaPlayer && mix) {
@@ -1635,7 +1834,10 @@ input[type="range"] {
     if (!parts.length) return null;
     const sr = parts[0].buffer.sampleRate;
     let end = 0;
-    for (const t of parts) end = Math.max(end, t.buffer.duration - trackOffsetSec(t));
+    for (const t of parts) {
+      const { te, dur } = clipWindow(t);
+      end = Math.max(end, (dur - te) - trackOffsetSec(t));
+    }
     const len = Math.max(1, Math.ceil(end * sr));
     const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
     const off = new OAC(1, len, sr);
@@ -1646,8 +1848,9 @@ input[type="range"] {
       g.gain.value = t.volume;
       src.connect(g);
       g.connect(off.destination);
-      const o = trackOffsetSec(t);
-      src.start(o < 0 ? -o : 0, o > 0 ? Math.min(o, t.buffer.duration) : 0);
+      const win = scheduleWindow(t, 0);
+      if (!win) continue;
+      src.start(win.startAt, win.bufStart, win.dur);
     }
     const rendered = await off.startRendering();
     const y = rendered.getChannelData(0);
@@ -1677,25 +1880,81 @@ input[type="range"] {
     logs.push(`  media player: ${mix.included.size} take(s) pre-mixed into one ${mix.duration.toFixed(2)}s buffer (sample-locked)`);
   }
 
-  function scheduleCountIn(startTime, beats, bpm) {
+  function clickVolumeNow() {
+    const v = Number(state.clickVolume);
+    return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.7;
+  }
+
+  // Click bus lives on the output only (master → clip guard → speakers).
+  // It is never connected to the mic, the capture processor, or a mixdown.
+  function ensureClickBus() {
     const ctx = engine.ctx;
-    const interval = 60 / bpm;
-    for (let i = 0; i < beats; i++) {
+    if (!ctx) return null;
+    if (engine.clickGain && engine.clickGain.context === ctx) {
+      engine.clickGain.gain.setTargetAtTime(clickVolumeNow(), ctx.currentTime, 0.02);
+      return engine.clickGain;
+    }
+    const g = ctx.createGain();
+    g.gain.value = clickVolumeNow();
+    g.__isClickBus = true;
+    g.connect(engine.master);
+    engine.clickGain = g;
+    return g;
+  }
+
+  function scheduleClicks(startTime, beats, bpm) {
+    const ctx = engine.ctx;
+    const bus = ensureClickBus();
+    if (!bus || !beats) return 0;
+    const interval = 60 / (bpm || 120);
+    const bpb = state.beatsPerBar || 4;
+    const vol = clickVolumeNow();
+    const n = Math.max(0, Math.ceil(beats));
+    for (let i = 0; i < n; i++) {
       const t = startTime + i * interval;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = "square";
-      osc.frequency.value = i === 0 ? 1320 : 880;
+      const bar = i % bpb === 0;
+      osc.frequency.value = bar ? 1320 : 880;
+      osc.__metro = true;
+      const peak = Math.max(0.0001, (bar ? 0.28 : 0.16) * vol);
       gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.exponentialRampToValueAtTime(0.22, t + 0.005);
+      gain.gain.exponentialRampToValueAtTime(peak, t + 0.005);
       gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
       osc.connect(gain);
-      gain.connect(engine.master);
+      gain.connect(bus);
       osc.start(t);
       osc.stop(t + 0.08);
       engine.clickNodes.push(osc);
     }
-    return beats * interval;
+    return n * interval;
+  }
+
+  function scheduleCountIn(startTime, beats, bpm) {
+    return scheduleClicks(startTime, beats, bpm);
+  }
+
+  function scheduleMetronome(t0, durationSec) {
+    if (!state.metronomeOn) return 0;
+    const bpm = state.bpm || 120;
+    const interval = 60 / bpm;
+    const beats = Math.max(1, Math.ceil((durationSec || 480) / interval) + 1);
+    return scheduleClicks(t0, beats, bpm);
+  }
+
+  function syncMetroUi() {
+    if (!ui.metro) return;
+    ui.metro.classList.toggle("is-on", !!state.metronomeOn);
+    ui.metro.setAttribute("aria-pressed", state.metronomeOn ? "true" : "false");
+    ui.metro.textContent = state.metronomeOn ? "Metronome on" : "Metronome off";
+    if (ui.clickVol) {
+      ui.clickVol.value = String(Math.round(clickVolumeNow() * 100));
+      ui.clickVolLabel.textContent = `${Math.round(clickVolumeNow() * 100)}%`;
+    }
+    if (ui.timeSig) ui.timeSig.value = String(state.beatsPerBar || 4);
+    if (ui.metroPlayback) ui.metroPlayback.checked = !!state.metronomeOnPlayback;
+    if (engine.clickGain) engine.clickGain.gain.setTargetAtTime(clickVolumeNow(), engine.ctx ? engine.ctx.currentTime : 0, 0.02);
   }
 
   function tickClock() {
@@ -1716,7 +1975,8 @@ input[type="range"] {
       } else {
         const remainBeats = Math.max(1, Math.ceil((dur - elapsed) / (60 / state.bpm)));
         ui.countDisplay.hidden = false;
-        ui.countDisplay.textContent = String(remainBeats);
+        if (beats >= 8 && remainBeats > 4) ui.countDisplay.textContent = `${Math.ceil(remainBeats / 4)}`;
+        else ui.countDisplay.textContent = String(remainBeats);
         ui.clock.textContent = formatTime(0);
       }
     } else {
@@ -1798,7 +2058,11 @@ input[type="range"] {
     const beats = state.countInBeats;
     const tCount = ctx.currentTime + 0.1; // one shared start, 100 ms ahead
     const countDur = beats > 0 ? scheduleCountIn(tCount, beats, state.bpm) : 0;
-    startPlaybackAt(tCount + countDur, mix);
+    const t0 = tCount + countDur;
+    startPlaybackAt(t0, mix);
+    if (state.metronomeOn && state.metronomeOnPlayback) {
+      scheduleMetronome(t0, Math.max(2, sessionDuration() + 1));
+    }
     startMeter();
     reverbHealthCheck(tCount + countDur);
     if (state.useMediaPlayer) diag("play: media player mode, so the Web Audio output meter is not used; watch for 'play() resolved' / 'ended' lines");
@@ -1885,7 +2149,9 @@ input[type="range"] {
     try {
       cap.source = ctx.createMediaStreamSource(stream);
       cap.proc = ctx.createScriptProcessor(4096, 1, 1);
+      cap.proc.__isCapture = true;
       cap.sink = ctx.createGain();
+      cap.sink.__isCapture = true;
       cap.sink.gain.value = 0;
       cap.proc.onaudioprocess = (e) => {
         const input = e.inputBuffer.getChannelData(0);
@@ -1973,63 +2239,22 @@ input[type="range"] {
     return recorder;
   }
 
-  // If the mic is silent after ~1 s, explain and retry once with plain {audio:true}.
-  async function micWatchdog() {
+  // Hint only if the mic is still silent after a second. Never stop, cancel,
+  // restart, or trim the take — he may be waiting to come in later.
+  function micWatchdog() {
     if (state.transport !== "recording" || !cap.recording) return;
-    if (cap.maxPeak >= SILENT_PEAK) {
-      if (cap.retried) { diag("mic OK after retry"); showMicAlert("Mic recovered after retrying with standard settings. Keep going."); }
-      return;
-    }
+    if (cap.maxPeak >= SILENT_PEAK) return;
     const reason = silentReason(engine.recStream);
-    diag(`MIC SILENT after 1s: max peak ${f3(cap.maxPeak)} (${reason})`);
-    if (cap.retried) {
-      showMicAlert(`Mic is silent: ${reason}. ${CALL_HINT}`);
-      return;
-    }
-    cap.retried = true;
-    showMicAlert(`Mic is silent: ${reason}. Retrying with the phone’s standard mic settings… ${CALL_HINT}`);
-    diag("retrying getUserMedia({audio:true})");
-    const old = engine.mediaRecorder;
-    engine.mediaRecorder = null;
-    if (old && old.state !== "inactive") { try { old.stop(); } catch (_) { /* */ } }
-    if (engine.recStream) {
-      for (const t of engine.recStream.getTracks()) t.stop();
-      engine.recStream = null;
-    }
-    disconnectCapture();
-    let stream;
-    try {
-      stream = await getMicStream(true);
-    } catch (err) {
-      showMicAlert(`Mic is silent and could not be reopened (${err && err.name}). ${CALL_HINT}`);
-      if (state.transport === "recording") stopAll("Stopped");
-      return;
-    }
-    if (state.transport !== "recording") {
-      for (const t of stream.getTracks()) t.stop();
-      diag("retry finished after Stop; new mic closed");
-      return;
-    }
-    engine.recStream = stream;
-    engine.recChunks = [];
-    cap.chunks = [];
-    cap.len = 0;
-    cap.maxPeak = 0;
-    cap.startTime = null;
-    setupCapture(stream);
-    const rec = wireRecorder(stream);
-    engine.mediaRecorder = rec;
-    if (rec) { try { rec.start(100); engine.mrStartTime = engine.ctx.currentTime; } catch (e) { diag(`MediaRecorder restart failed: ${e.name}`); } }
-    cap.watchdog = setTimeout(micWatchdog, 1200);
+    diag(`MIC quiet after 1s (take keeps rolling): max peak ${f3(cap.maxPeak)} (${reason})`);
+    showMicAlert(`No sound yet — that’s fine. This take will keep going until you hit Stop, and the quiet start is kept. ${CALL_HINT}`);
   }
 
   function pcmToBuffer(ctx) {
-    const pad = Math.round(cap.padSec * ctx.sampleRate);
-    const len = pad + cap.len;
+    const len = cap.len;
     if (!len) return null;
     const buf = ctx.createBuffer(1, len, ctx.sampleRate);
     const out = buf.getChannelData(0);
-    let o = pad;
+    let o = 0;
     for (const c of cap.chunks) { out.set(c, o); o += c.length; }
     return buf;
   }
@@ -2127,7 +2352,10 @@ input[type="range"] {
         engine.mrStartTime = engine.ctx.currentTime;
         cap.startTime = null;
         cap.recording = true;
+        cap.latencyEstimate = estimateRoundTripMs();
+        diag(`latency auto ${cap.latencyEstimate.autoMs} ms (${cap.latencyEstimate.reason}, mode ${cap.latencyEstimate.mode}, reported out ${cap.latencyEstimate.outMs} in ${cap.latencyEstimate.inMs}) + manual ${manualLatencyMs(cap.latencyEstimate.mode)} ms`);
         startPlaybackAt(t0);
+        if (state.metronomeOn) scheduleMetronome(t0, 8 * 60);
         state.transport = "recording";
         state.pendingTransport = null;
         state.playStartedAt = t0;
@@ -2198,7 +2426,7 @@ input[type="range"] {
     }
     const mrPeak = mrBuf ? bufferPeak(mrBuf) : 0;
     diag(`MediaRecorder blob: ${mrBlob ? `${mrBlob.type} ${mrBlob.size} bytes` : "none"}; decoded: ${mrBuf ? `${mrBuf.length} samples, ${mrBuf.duration.toFixed(2)}s, peak ${f3(mrPeak)}` : `FAILED ${mrErr}`}`);
-    diag(`PCM capture: ${pcmBuf ? `${pcmBuf.length} samples, ${pcmBuf.duration.toFixed(2)}s, peak ${f3(pcmPeak)}${cap.padSec ? `, padded ${cap.padSec.toFixed(2)}s after mic retry` : ""}` : "none"}`);
+    diag(`PCM capture: ${pcmBuf ? `${pcmBuf.length} samples, ${pcmBuf.duration.toFixed(2)}s, peak ${f3(pcmPeak)}` : "none"}`);
 
     let buffer = null;
     let blob = null;
@@ -2220,7 +2448,9 @@ input[type="range"] {
     // Positive = it started before t0 (skip that much), negative = after.
     const recStart = source.startsWith("PCM") ? cap.startTime : engine.mrStartTime;
     const startCompMs = Number.isFinite(recStart) ? Math.round((state.playStartedAt - recStart) * 1000) : 0;
-    diag(`take uses: ${source || "nothing"}; recorder started ${Math.abs(startCompMs)} ms ${startCompMs >= 0 ? "before" : "after"} the shared start; latency comp ${state.latencyMs} ms`);
+    const est = cap.latencyEstimate || estimateRoundTripMs();
+    const comp = compensationForNewTake(startCompMs, est);
+    diag(`take uses: ${source || "nothing"}; recorder started ${Math.abs(startCompMs)} ms ${startCompMs >= 0 ? "before" : "after"} the shared start; auto ${comp.autoMs} ms (${est.reason}) + extra ${comp.manualMs} ms + start ${comp.startCompMs} ms = ${comp.totalMs} ms earlier (${comp.mode})`);
 
     if (!blob) {
       setStatus("Recording was empty. Try again?");
@@ -2232,40 +2462,39 @@ input[type="range"] {
 
     const index = state.tracks.length + 1;
     const peak = buffer ? bufferPeak(buffer) : 0;
-    const volume = 1; // Polish sets the level now; no more blind volume boost
+    const volume = 1;
     state.tracks.push({
       id: uid(),
       name: `Track ${index}`,
       blob,
       buffer,
       rawBuffer: buffer,
-      polish: !!buffer && peak >= SILENT_PEAK,
       peak,
       mimeType,
       volume,
       muted: false,
       solo: false,
-      latencyOffsetMs: buffer ? state.latencyMs + startCompMs : 0,
+      latencyOffsetMs: buffer ? comp.totalMs : 0,
+      latencyAutoMs: comp.autoMs,
+      latencyManualMs: comp.manualMs,
+      latencyStartCompMs: comp.startCompMs,
+      outputMode: comp.mode,
       alignMs: 0,
+      trimStartSec: 0,
+      trimEndSec: 0,
       octave: 0,
       reverbSend: 0.35,
       delaySend: 0.2,
     });
     const newTrack = state.tracks[state.tracks.length - 1];
-    if (buffer && state.autoAlignNew && state.tracks.length > 1 && peak >= SILENT_PEAK) {
-      alignTracks(newTrack);
-    }
     renderTracks();
-    if (newTrack.polish) rebuildChain(newTrack).then(() => persistAfterEdit("polish"));
     if (!buffer) {
       setStatus(`Captured Track ${index}. It will play through the basic audio player on this browser.`);
     } else if (peak < SILENT_PEAK) {
-      const reason = "the mic recorded silence";
-      setStatus(`Captured ${buffer.duration.toFixed(1)}s as Track ${index}, but it’s silent.`);
-      showMicAlert(`Mic is silent: ${reason}. ${CALL_HINT}`);
+      setStatus(`Captured ${buffer.duration.toFixed(1)}s as Track ${index}. The start is quiet, and nothing was cut.`);
     } else {
       showMicAlert("");
-      setStatus(`Captured ${buffer.duration.toFixed(1)}s as Track ${index}.${volume > 1 ? " It was quiet, so its volume was raised." : ""}`);
+      setStatus(`Captured ${buffer.duration.toFixed(1)}s as Track ${index}. Latency compensation ${comp.totalMs} ms (${comp.mode}).`);
     }
     state.transport = "stopped";
     stopGraphSources();
@@ -2304,10 +2533,10 @@ input[type="range"] {
     });
   }
 
-  function drawWaveform(canvas, buffer) {
+  function drawWaveform(canvas, buffer, opts) {
     const dpr = Math.max(1, window.devicePixelRatio || 1);
-    const width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
-    const height = Math.max(1, Math.floor(64 * dpr));
+    const width = Math.max(1, Math.floor((canvas.clientWidth || canvas.parentElement && canvas.parentElement.clientWidth || 120) * dpr));
+    const height = Math.max(1, Math.floor((canvas.clientHeight || 64) * dpr));
     canvas.width = width;
     canvas.height = height;
     const g = canvas.getContext("2d");
@@ -2315,11 +2544,17 @@ input[type="range"] {
     g.fillRect(0, 0, width, height);
     if (!buffer) return;
     const data = buffer.getChannelData(0);
-    const step = Math.max(1, Math.floor(data.length / width));
+    const sr = buffer.sampleRate;
+    const ts = opts && opts.trimStart ? Math.round(opts.trimStart * sr) : 0;
+    const te = opts && opts.trimEnd ? Math.round(opts.trimEnd * sr) : 0;
+    const a = Math.max(0, ts);
+    const b = Math.max(a + 1, data.length - Math.max(0, te));
+    const span = b - a;
+    const step = Math.max(1, Math.floor(span / width));
     const mid = height / 2;
     g.fillStyle = "#c9a06a";
     for (let x = 0; x < width; x++) {
-      const start = x * step;
+      const start = a + x * step;
       let min = 1;
       let max = -1;
       for (let i = 0; i < step; i++) {
@@ -2535,226 +2770,13 @@ self.onmessage = (e) => {
     return t.rawBuffer;
   }
 
-  // ================= Polish: offline "mix engineer" pass =================
-  const dB = (v) => 20 * Math.log10(Math.max(1e-9, v));
-  const fromDb = (d) => Math.pow(10, d / 20);
-  const POLISH_TARGET_LOUDNESS = -16; // dB (gated RMS of 400 ms blocks, ~LUFS for voice)
-  const POLISH_CEILING = fromDb(-1.5); // sample-peak ceiling ~= -1 dBTP
-
-  function percentile(sorted, q) {
-    return sorted[Math.max(0, Math.min(sorted.length - 1, Math.floor(sorted.length * q)))];
-  }
-
-  function analyzeTake(x, sr) {
-    const W = Math.max(16, Math.round(sr * 0.01));
-    const nw = Math.floor(x.length / W);
-    const rms = new Float32Array(nw);
-    let peak = 0;
-    for (let w = 0; w < nw; w++) {
-      let e = 0;
-      for (let i = w * W, end = i + W; i < end; i++) { const v = x[i]; e += v * v; const a = v < 0 ? -v : v; if (a > peak) peak = a; }
-      rms[w] = Math.sqrt(e / W);
-    }
-    const sorted = Array.from(rms).sort((a, b) => a - b);
-    const floor = Math.max(1e-5, percentile(sorted, 0.1));
-    const loudRms = percentile(sorted, 0.98);
-    const speechThr = Math.max(floor * 4, loudRms * fromDb(-26));
-    const active = sorted.filter((v) => v > speechThr);
-    const speech = active.length ? percentile(active, 0.5) : loudRms;
-    return { W, rms, peak, floor, speech, loudRms, activeFrac: active.length / Math.max(1, nw) };
-  }
-
-  // Gentle downward expander: only pulls the gaps down (max -12 dB), with a
-  // 200 ms hold and slow release, so word endings and soft consonants survive.
-  function applyGate(x, sr, st) {
-    const gateThr = Math.min(st.floor * 2.5, st.speech * fromDb(-24));
-    const holdW = Math.round(0.2 / 0.01);
-    const minGain = fromDb(-12);
-    const target = new Float32Array(st.rms.length);
-    let hold = 0;
-    for (let w = 0; w < st.rms.length; w++) {
-      if (st.rms[w] >= gateThr) { target[w] = 1; hold = holdW; }
-      else if (hold > 0) { target[w] = 1; hold--; }
-      else target[w] = Math.max(minGain, Math.pow(st.rms[w] / gateThr, 2));
-    }
-    // look-ahead: open 20 ms before the level crosses, so attacks aren't clipped
-    for (let w = 0; w < target.length - 2; w++) target[w] = Math.max(target[w], target[w + 1], target[w + 2]);
-    const y = new Float32Array(x.length);
-    const att = 1 - Math.exp(-1 / (0.005 * sr));
-    const rel = 1 - Math.exp(-1 / (0.15 * sr));
-    let g = target.length ? target[0] : 1;
-    for (let i = 0; i < x.length; i++) {
-      const t = target[Math.min(target.length - 1, Math.floor(i / st.W))] ?? 1;
-      g += (t - g) * (t > g ? att : rel);
-      y[i] = x[i] * g;
-    }
-    return { y, gateThr };
-  }
-
-  // Approximate integrated loudness: 400 ms blocks (75% overlap), absolute gate
-  // -70 dB and relative gate -10 dB as in BS.1770 (without K-weighting).
-  function gatedLoudness(y, sr) {
-    const B = Math.round(sr * 0.4), H = Math.round(B / 4);
-    const blocks = [];
-    for (let i = 0; i + B <= y.length; i += H) {
-      let e = 0;
-      for (let j = i; j < i + B; j++) e += y[j] * y[j];
-      blocks.push(e / B);
-    }
-    if (!blocks.length) { let e = 0; for (let i = 0; i < y.length; i++) e += y[i] * y[i]; blocks.push(e / Math.max(1, y.length)); }
-    const abs = blocks.filter((p) => p > Math.pow(10, -70 / 10));
-    if (!abs.length) return -120;
-    const mean1 = abs.reduce((a, b) => a + b, 0) / abs.length;
-    const rel = abs.filter((p) => p > mean1 * Math.pow(10, -10 / 10));
-    const mean2 = rel.reduce((a, b) => a + b, 0) / Math.max(1, rel.length);
-    return 10 * Math.log10(Math.max(1e-12, mean2));
-  }
-
-  // Look-ahead peak limiter (5 ms), guaranteed below the ceiling.
-  function limitPeaks(y, sr, ceiling) {
-    const n = y.length, L = Math.max(1, Math.round(sr * 0.005));
-    const req = new Float32Array(n);
-    for (let i = 0; i < n; i++) { const a = Math.abs(y[i]); req[i] = a > ceiling ? ceiling / a : 1; }
-    // forward-looking sliding minimum over [i, i+L]
-    const m = new Float32Array(n);
-    const dq = new Int32Array(n + L + 1); let h = 0, t = 0;
-    for (let i = n - 1; i >= 0; i--) {
-      while (t > h && req[dq[t - 1]] >= req[i]) t--;
-      dq[t++] = i;
-      while (dq[h] > i + L) h++;
-      m[i] = req[dq[h]];
-    }
-    const rel = 1 - Math.exp(-1 / (0.08 * sr));
-    let acc = 0, g = 1, reduced = 0;
-    const buf = new Float32Array(L);
-    for (let i = 0; i < n; i++) {
-      acc += m[i] - buf[i % L]; buf[i % L] = m[i];
-      const avg = i + 1 >= L ? acc / L : Math.min(1, (acc + (L - i - 1)) / L);
-      g = Math.min(avg, g + (1 - g) * rel);
-      g = Math.min(g, req[i]);
-      if (g < 0.891) reduced++; // more than 1 dB of limiting
-      let v = y[i] * g;
-      if (v > ceiling) v = ceiling; else if (v < -ceiling) v = -ceiling;
-      y[i] = v;
-    }
-    return reduced / Math.max(1, n);
-  }
-
-  // The compressor has a few ms of built-in look-ahead delay. Measure it once
-  // per sample rate with a click, and remove it, so polished takes stay aligned.
-  const chainLatencyCache = {};
-  async function polishChainLatency(sr) {
-    if (chainLatencyCache[sr] !== undefined) return chainLatencyCache[sr];
-    let lag = 0;
-    try {
-      const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-      const n = Math.round(sr * 0.1);
-      const off = new OAC(1, n, sr);
-      const b = off.createBuffer(1, n, sr);
-      b.getChannelData(0)[Math.round(sr * 0.01)] = 0.05;
-      const src = off.createBufferSource(); src.buffer = b;
-      const comp = off.createDynamicsCompressor();
-      comp.threshold.value = -26; comp.knee.value = 8; comp.ratio.value = 3.5; comp.attack.value = 0.015; comp.release.value = 0.2;
-      src.connect(comp); comp.connect(off.destination); src.start(0);
-      const r = (await off.startRendering()).getChannelData(0);
-      let best = 0, at = Math.round(sr * 0.01);
-      for (let i = 0; i < r.length; i++) { const a = Math.abs(r[i]); if (a > best) { best = a; at = i; } }
-      lag = Math.max(0, at - Math.round(sr * 0.01));
-    } catch (_) { lag = 0; }
-    chainLatencyCache[sr] = lag;
-    diag(`polish chain latency: ${lag} samples (${(lag / sr * 1000).toFixed(2)} ms), removed from polished takes`);
-    return lag;
-  }
-
-  async function polishBuffer(raw, onProgress) {
-    const t0 = performance.now();
-    const sr = raw.sampleRate;
-    const x = new Float32Array(monoOf(raw));
-    const st = analyzeTake(x, sr);
-    if (st.peak < SILENT_PEAK || st.loudRms < 1e-4) return { buffer: null, info: "silent take, left as recorded" };
-    const gated = applyGate(x, sr, st);
-    if (onProgress) onProgress(0.1);
-    // bring the speech to about -20 dBFS before the compressor so it behaves the same for any mic distance
-    const preDb = Math.max(-20, Math.min(36, -20 - dB(st.speech)));
-    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-    const off = new OAC(1, x.length, sr);
-    const src = off.createBufferSource();
-    const inBuf = off.createBuffer(1, x.length, sr);
-    inBuf.copyToChannel(gated.y, 0);
-    src.buffer = inBuf;
-    const hp = off.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 80; hp.Q.value = 0.707;
-    const mud = off.createBiquadFilter(); mud.type = "peaking"; mud.frequency.value = 320; mud.Q.value = 1.0; mud.gain.value = -2.5;
-    const pres = off.createBiquadFilter(); pres.type = "peaking"; pres.frequency.value = 4200; pres.Q.value = 0.9; pres.gain.value = 2.0;
-    const ess = off.createBiquadFilter(); ess.type = "peaking"; ess.frequency.value = 7500; ess.Q.value = 2.0; ess.gain.value = -2.0;
-    const pre = off.createGain(); pre.gain.value = fromDb(preDb);
-    const comp = off.createDynamicsCompressor();
-    comp.threshold.value = -26; comp.knee.value = 8; comp.ratio.value = 3.5;
-    comp.attack.value = 0.015; comp.release.value = 0.2;
-    src.connect(hp); hp.connect(mud); mud.connect(pres); pres.connect(ess); ess.connect(pre); pre.connect(comp); comp.connect(off.destination);
-    src.start(0);
-    const dur = x.length / sr;
-    if (onProgress && off.suspend) {
-      for (let f = 1; f < 8; f++) {
-        const at = Math.floor((dur * f / 8) * sr / 128) * 128 / sr;
-        if (at <= 0 || at >= dur) continue;
-        off.suspend(at).then(() => { onProgress(0.1 + 0.75 * f / 8); off.resume(); }).catch(() => {});
-      }
-    }
-    const rendered = await off.startRendering();
-    const yRaw = rendered.getChannelData(0);
-    const lag = await polishChainLatency(sr, preDb);
-    const y = new Float32Array(yRaw.length);
-    y.set(yRaw.subarray(lag), 0);
-    const lufs = gatedLoudness(y, sr);
-    let gainDb = Math.max(-24, Math.min(30, POLISH_TARGET_LOUDNESS - lufs));
-    // Don't let the limiter do more than ~4 dB of work on the loud bits (it
-    // would sound squashed): spiky takes land a little under the target instead.
-    const absSorted = [];
-    for (let i = 0; i < y.length; i += 7) absSorted.push(Math.abs(y[i]));
-    absSorted.sort((a, b) => a - b);
-    const p999 = Math.max(1e-6, percentile(absSorted, 0.999));
-    const maxGainDb = dB(POLISH_CEILING) + 4 - dB(p999);
-    let headroomCapped = false;
-    if (gainDb > maxGainDb) { gainDb = maxGainDb; headroomCapped = true; }
-    const g = fromDb(gainDb);
-    for (let i = 0; i < y.length; i++) y[i] *= g;
-    const limited = limitPeaks(y, sr, POLISH_CEILING);
-    let outPeak = 0; for (let i = 0; i < y.length; i++) { const a = Math.abs(y[i]); if (a > outPeak) outPeak = a; }
-    const finalLoud = gatedLoudness(y, sr);
-    if (onProgress) onProgress(1);
-    const info = `noise ${dB(st.floor).toFixed(0)} dB, voice ${dB(st.speech).toFixed(0)} dB → ${finalLoud.toFixed(1)} dB loudness, peak ${dB(outPeak).toFixed(1)} dB`;
-    diag(`polish: input peak ${dB(st.peak).toFixed(1)} dB, noise floor ${dB(st.floor).toFixed(1)} dB, voice ${dB(st.speech).toFixed(1)} dB, voice ${(st.activeFrac * 100).toFixed(0)}% of take; gate ${dB(gated.gateThr).toFixed(1)} dB (max -12 dB); pre-gain ${preDb.toFixed(1)} dB; comp 3.5:1 @ -26 dB; loudness ${lufs.toFixed(1)} → ${finalLoud.toFixed(1)} (target ${POLISH_TARGET_LOUDNESS}${headroomCapped ? ", held back to avoid over-limiting" : ""}); limiter >1 dB on ${(limited * 100).toFixed(1)}% of samples; out peak ${dB(outPeak).toFixed(2)} dBFS; ${Math.round(performance.now() - t0)} ms`);
-    return { buffer: makeBuffer(y, sr), info, stats: { inPeak: st.peak, floor: st.floor, speech: st.speech, lufsIn: lufs, lufsOut: finalLoud, outPeak, preDb, gainDb } };
-  }
-
-  // raw take -> (Polish) -> base -> (octave shift) -> what plays
+  // Playback chain: raw take, then optional octave shift.
   async function rebuildChain(track) {
     const raw = rawOf(track);
     if (!raw) return;
     const token = (track.chainToken = (track.chainToken || 0) + 1);
     track.busy = true;
-    let base = raw;
-    if (track.polish && !track.prePolished) {
-      if (track.polishedBuffer === undefined) {
-        track.busyText = "polishing…";
-        renderTracks();
-        try {
-          const res = await polishBuffer(raw, (p) => {
-            track.busyText = `polishing… ${Math.round(p * 100)}%`;
-            const el = ui.trackList.querySelector(`.track[data-id="${track.id}"] .oct-busy`);
-            if (el) el.textContent = track.busyText;
-          });
-          track.polishedBuffer = res.buffer;
-          track.polishInfo = res.info;
-          track.polishStats = res.stats || null;
-        } catch (e) {
-          diag(`polish failed: ${e && e.name} ${e && e.message}; playing the raw take`);
-          track.polishedBuffer = null;
-          track.polishInfo = "polish failed, raw take";
-        }
-      }
-      if (track.polishedBuffer) base = track.polishedBuffer;
-    }
+    const base = raw;
     if (token !== track.chainToken) return;
     if (track.baseBuffer !== base) { track.baseBuffer = base; track.shiftCache = {}; }
     track.wavCache = null;
@@ -2776,14 +2798,6 @@ self.onmessage = (e) => {
     if (token !== track.chainToken) return;
     track.busy = false;
     renderTracks();
-  }
-
-  async function setPolish(track, on) {
-    track.polish = !!on;
-    diag(`polish ${on ? "ON" : "OFF"} for "${track.name}"`);
-    await rebuildChain(track);
-    if (state.transport === "playing") setStatus("Polish change applies the next time you tap Play.", "is-playing");
-    persistAfterEdit("polish");
   }
 
   async function renderShifted(track, octaves) {
@@ -2830,8 +2844,6 @@ self.onmessage = (e) => {
         buffer: buf,
         baseBuffer: buf,
         rawBuffer: buf,
-        polish: false,
-        prePolished: !!(track.prePolished || (track.polish && track.polishedBuffer)),
         peak: bufferPeak(buf),
         mimeType: "audio/wav",
         volume: Math.round((track.volume || 1) * 0.8 * 100) / 100,
@@ -2839,7 +2851,13 @@ self.onmessage = (e) => {
         solo: false,
         octave: 0,
         alignMs: track.alignMs || 0,
+        trimStartSec: track.trimStartSec || 0,
+        trimEndSec: track.trimEndSec || 0,
         latencyOffsetMs: track.latencyOffsetMs || 0,
+        latencyAutoMs: track.latencyAutoMs,
+        latencyManualMs: track.latencyManualMs,
+        latencyStartCompMs: track.latencyStartCompMs,
+        outputMode: track.outputMode,
         reverbSend: track.reverbSend,
         delaySend: track.delaySend,
       };
@@ -2864,97 +2882,544 @@ self.onmessage = (e) => {
     return track.blob;
   }
 
-  // ================= Auto-align =================
-  // Total start offset in seconds: positive skips into the take (plays earlier),
-  // negative delays it. Non-destructive: the PCM is never trimmed.
+  // ================= Latency, clip window, arranger =================
+  const BT_DEFAULT_MS = 180; // Bluetooth output when Chrome under-reports (typical A2DP on Android)
+  const BT_LABEL_RE = /bluetooth|\bbuds\b|airpods?|\bheadset\b|a2dp|\bhfp\b|\bsco\b|galaxy buds|pixel buds|freebuds|\bw[fh]-\d|jabra|\bbeats\b|bose |jbl (tune|live|wave|go |flip)/i;
+  const LAT_KEYS = {
+    speaker: "revamped-reverb.latency.speaker",
+    wired: "revamped-reverb.latency.wired",
+    bluetooth: "revamped-reverb.latency.bluetooth",
+  };
+  const MIN_CLIP = 0.02;
+
+  function looksBluetooth(label) {
+    return BT_LABEL_RE.test(String(label || ""));
+  }
+
+  function detectBluetooth(opts) {
+    if (opts && opts.bluetooth === true) return true;
+    if (opts && opts.bluetooth === false) return false;
+    const labels = [];
+    if (opts && opts.sinkLabel) labels.push(opts.sinkLabel);
+    if (opts && Array.isArray(opts.labels)) labels.push(...opts.labels);
+    const list = opts && opts.devices ? opts.devices : (engine.cachedDevices || []);
+    for (const d of list) labels.push((d && d.label) || "");
+    return labels.some(looksBluetooth);
+  }
+
+  function currentOutputMode(opts) {
+    if (opts && opts.mode) return opts.mode;
+    if (state.latencyModePinned && state.latencyMode) return state.latencyMode;
+    const mon = (opts && opts.monitor) || monitorMode();
+    if (mon === "speaker") return "speaker";
+    return detectBluetooth(opts) ? "bluetooth" : "wired";
+  }
+
+  function manualLatencyMs(mode) {
+    const m = mode || currentOutputMode();
+    const v = state.manualLatency[m];
+    return Number.isFinite(v) ? v : 0;
+  }
+
+  function setManualLatency(mode, ms) {
+    const m = mode || currentOutputMode();
+    state.manualLatency[m] = Math.max(-100, Math.min(400, Math.round(ms)));
+    lsSet(LAT_KEYS[m], String(state.manualLatency[m]));
+    if (m === currentOutputMode()) {
+      state.latencyMs = state.manualLatency[m];
+      syncLatencyUi();
+    }
+  }
+
+  function estimateRoundTripMs(opts) {
+    opts = opts || {};
+    const ctx = opts.ctx || engine.ctx;
+    const out = opts.outputLatency != null ? Number(opts.outputLatency) : (ctx && Number(ctx.outputLatency));
+    const base = opts.baseLatency != null ? Number(opts.baseLatency) : (ctx && Number(ctx.baseLatency));
+    const outMs = Math.round(((Number.isFinite(out) ? out : 0) + (Number.isFinite(base) ? base : 0)) * 1000);
+    let inMs = 0;
+    if (opts.inputLatency != null) {
+      const raw = Number(opts.inputLatency);
+      inMs = Math.round(raw > 5 ? raw : raw * 1000); // seconds unless already in ms
+    } else {
+      const t = (opts.inputTrack) || (engine.recStream && engine.recStream.getAudioTracks()[0]);
+      const lat = t && t.getSettings && t.getSettings().latency;
+      if (Number.isFinite(lat)) inMs = Math.round(lat * 1000);
+    }
+    const mode = currentOutputMode(opts);
+    const bluetooth = mode === "bluetooth" || detectBluetooth(opts);
+    let usedOut = outMs;
+    let reason = "reported";
+    if (bluetooth && outMs < 80) { usedOut = BT_DEFAULT_MS; reason = "bluetooth-default"; }
+    else if (!outMs && !inMs) {
+      if (mode === "speaker") { usedOut = 40; reason = "speaker-fallback"; }
+      else if (mode === "wired") { usedOut = 20; reason = "wired-fallback"; }
+      else if (bluetooth) { usedOut = BT_DEFAULT_MS; reason = "bluetooth-default"; }
+    }
+    const autoMs = usedOut + inMs;
+    return { autoMs, outMs, inMs, usedOut, bluetooth, mode, reason, defaultBtMs: BT_DEFAULT_MS };
+  }
+
+  function compensationForNewTake(startCompMs, estimate) {
+    const est = estimate || estimateRoundTripMs();
+    const manual = manualLatencyMs(est.mode);
+    return {
+      autoMs: est.autoMs,
+      manualMs: manual,
+      startCompMs: startCompMs || 0,
+      totalMs: est.autoMs + manual + (startCompMs || 0),
+      mode: est.mode,
+      reason: est.reason,
+      estimate: est,
+    };
+  }
+
+  function syncLatencyUi() {
+    if (!ui.latency) return;
+    const mode = currentOutputMode();
+    state.latencyMode = mode;
+    const man = manualLatencyMs(mode);
+    state.latencyMs = man;
+    ui.latency.value = String(man);
+    const est = estimateRoundTripMs();
+    const total = est.autoMs + man;
+    ui.latencyLabel.textContent = `auto ${est.autoMs} + ${man} = ${total} ms`;
+    const hint = ui.latencyHint;
+    if (hint) {
+      const why = est.reason === "bluetooth-default"
+        ? `Bluetooth detected, so the auto number uses a ${BT_DEFAULT_MS} ms output estimate (Chrome often under-reports Bluetooth).`
+        : (est.reason === "reported"
+          ? `Auto is outputLatency + baseLatency (${est.outMs} ms) plus the mic latency (${est.inMs} ms).`
+          : `Auto uses a ${est.usedOut} ms ${est.mode} fallback because the browser did not report a delay.`);
+      hint.textContent = `New takes shift earlier by this amount so they line up with what you hear. Nothing is cut. This extra slider is saved for ${mode}. ${why}`;
+    }
+    if (ui.latSpeaker) {
+      ui.latSpeaker.setAttribute("aria-pressed", mode === "speaker" ? "true" : "false");
+      ui.latWired.setAttribute("aria-pressed", mode === "wired" ? "true" : "false");
+      ui.latBluetooth.setAttribute("aria-pressed", mode === "bluetooth" ? "true" : "false");
+    }
+  }
+
+  function pinLatencyMode(mode) {
+    state.latencyMode = mode;
+    state.latencyModePinned = true;
+    if (mode === "speaker" && monitorMode() !== "speaker") setMonitorMode("speaker", true);
+    if (mode !== "speaker" && monitorMode() !== "earbuds") setMonitorMode("earbuds", true);
+    syncLatencyUi();
+  }
+
+  function trimStartOf(t) { return Math.max(0, t.trimStartSec || 0); }
+  function trimEndOf(t) { return Math.max(0, t.trimEndSec || 0); }
+
+  function clipWindow(t) {
+    const dur = t.buffer ? t.buffer.duration : 0;
+    let ts = trimStartOf(t);
+    let te = trimEndOf(t);
+    if (ts + te > dur - MIN_CLIP) {
+      const over = ts + te - (dur - MIN_CLIP);
+      te = Math.max(0, te - over);
+      ts = Math.max(0, Math.min(ts, dur - te - MIN_CLIP));
+    }
+    return { ts, te, dur, len: Math.max(0, dur - ts - te) };
+  }
+
+  function scheduleWindow(t, when) {
+    if (!t.buffer) return null;
+    const { ts, te, dur } = clipWindow(t);
+    const offsetSec = trackOffsetSec(t);
+    const tBuf0 = Math.max(ts, offsetSec);
+    const tBufEnd = dur - te;
+    if (tBuf0 >= tBufEnd) return null;
+    return { startAt: when + (tBuf0 - offsetSec), bufStart: tBuf0, dur: tBufEnd - tBuf0, offsetSec, ts, te };
+  }
+
+  function compLabel(t) {
+    const total = Math.round(t.latencyOffsetMs || 0);
+    const auto = t.latencyAutoMs;
+    const man = t.latencyManualMs;
+    const st = t.latencyStartCompMs;
+    const parts = [];
+    if (Number.isFinite(auto)) parts.push(`auto ${auto}`);
+    if (Number.isFinite(man) && man) parts.push(`extra ${man}`);
+    if (Number.isFinite(st) && st) parts.push(`start ${st}`);
+    const mode = t.outputMode ? ` · ${t.outputMode}` : "";
+    return parts.length ? `Latency ${total} ms (${parts.join(" + ")}${mode})` : `Latency ${total} ms${mode}`;
+  }
+
+  function makeClipGuard(ctx) {
+    const shaper = ctx.createWaveShaper();
+    const n = 8192;
+    const ceiling = Math.pow(10, -1 / 20); // -1 dBFS
+    const knee = Math.pow(10, -2.5 / 20);
+    const curve = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = (i / (n - 1)) * 2 - 1;
+      const ax = Math.abs(x);
+      let y;
+      if (ax <= knee) y = ax;
+      else if (ax >= ceiling) y = ceiling;
+      else {
+        const t = (ax - knee) / (ceiling - knee);
+        y = knee + (ceiling - knee) * (1 - (1 - t) * (1 - t));
+      }
+      curve[i] = y * (x < 0 ? -1 : 1);
+    }
+    shaper.curve = curve;
+    shaper.oversample = "2x";
+    return shaper;
+  }
+
+  function pushEditUndo(label, restore) {
+    pendingUndo = { restore, label };
+    undoState = null;
+    ui.toastText.textContent = label;
+    ui.toast.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { hideToast(); pendingUndo = null; }, 5000);
+  }
+
+  function runToastUndo() {
+    if (pendingUndo) {
+      const u = pendingUndo;
+      pendingUndo = null;
+      hideToast();
+      u.restore();
+      return;
+    }
+    undoDelete();
+  }
+
+  // Timeline pixels-per-second and selection for the all-tracks view.
+  function arrangerWidthSec() {
+    let maxEnd = 2;
+    let minStart = 0;
+    for (const t of state.tracks) {
+      if (!t.buffer) continue;
+      const { ts, te, dur } = clipWindow(t);
+      const off = trackOffsetSec(t);
+      minStart = Math.min(minStart, ts - off);
+      maxEnd = Math.max(maxEnd, dur - te - off);
+    }
+    return { minStart, maxEnd, span: Math.max(2, maxEnd - minStart + 0.5) };
+  }
+
+  function renderArranger() {
+    if (!ui.arranger || !ui.arrangerRows) return;
+    const tracks = state.tracks;
+    ui.arranger.hidden = tracks.length === 0;
+    if (ui.arrangerHint) ui.arrangerHint.hidden = tracks.length === 0;
+    if (!tracks.length) { ui.arrangerRows.innerHTML = ""; return; }
+    const pps = state.arrangerPx || 80;
+    const { minStart, span } = arrangerWidthSec();
+    const width = Math.max(ui.arranger.clientWidth - 96, Math.round(span * pps));
+    const origin = minStart; // timeline sec at left of lane
+    state.arrangerOrigin = origin;
+    const inner = document.createElement("div");
+    inner.className = "arranger-inner";
+    inner.style.width = `${96 + width}px`;
+    inner.style.setProperty("--pps", `${pps}px`);
+    const ruler = document.createElement("div");
+    ruler.className = "arranger-ruler";
+    ruler.style.marginLeft = "96px";
+    ruler.style.width = `${width}px`;
+    const step = span > 20 ? 2 : 1;
+    const startTick = Math.floor(origin);
+    const endTick = Math.ceil(origin + width / pps);
+    for (let s = startTick; s <= endTick; s += step) {
+      const lab = document.createElement("span");
+      lab.textContent = `${s}s`;
+      lab.style.position = "absolute";
+      lab.style.left = `${96 + (s - origin) * pps}px`;
+      lab.style.top = "4px";
+      ruler.appendChild(lab);
+    }
+    inner.appendChild(ruler);
+    tracks.forEach((track) => {
+      const row = document.createElement("div");
+      row.className = "arranger-row";
+      row.dataset.id = track.id;
+      const meta = document.createElement("div");
+      meta.className = "arranger-lane-meta";
+      meta.innerHTML = `<strong>${escapeAttr(track.name)}</strong>
+        <button type="button" class="btn btn-tiny btn-mute ${track.muted ? "is-on" : ""}" aria-pressed="${track.muted}">${track.muted ? "Muted" : "Mute"}</button>
+        <div class="track-meter" aria-hidden="true"><div class="track-meter-fill" data-meter="${track.id}"></div></div>`;
+      meta.querySelector(".btn-mute").addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleMute(track);
+      });
+      const lane = document.createElement("div");
+      lane.className = "arranger-lane";
+      lane.style.width = `${width}px`;
+      if (track.buffer) {
+        const { ts, te, dur } = clipWindow(track);
+        const off = trackOffsetSec(track);
+        const leftSec = ts - off;
+        const lenSec = Math.max(MIN_CLIP, dur - te - ts);
+        const clip = document.createElement("div");
+        clip.className = "arr-clip" + (state.selectedTrackId === track.id ? " is-selected" : "");
+        clip.dataset.id = track.id;
+        clip.style.left = `${(leftSec - origin) * pps}px`;
+        clip.style.width = `${Math.max(8, lenSec * pps)}px`;
+        const cv = document.createElement("canvas");
+        cv.setAttribute("aria-hidden", "true");
+        clip.appendChild(cv);
+        const hL = document.createElement("div"); hL.className = "arr-trim left";
+        const hR = document.createElement("div"); hR.className = "arr-trim right";
+        clip.appendChild(hL); clip.appendChild(hR);
+        if (state.selectedTrackId === track.id) {
+          const badge = document.createElement("div");
+          badge.className = "arr-offset-badge";
+          badge.textContent = dragBadgeText(track);
+          clip.appendChild(badge);
+        }
+        bindClipPointer(clip, track, hL, hR);
+        lane.appendChild(clip);
+        requestAnimationFrame(() => drawWaveform(cv, track.buffer, { trimStart: ts, trimEnd: te }));
+      }
+      row.appendChild(meta);
+      row.appendChild(lane);
+      inner.appendChild(row);
+    });
+    ui.arrangerRows.innerHTML = "";
+    ui.arrangerRows.appendChild(inner);
+    if (!ui.arranger.querySelector("#arranger-playhead")) {
+      const ph = document.createElement("div");
+      ph.id = "arranger-playhead";
+      ph.className = "arranger-playhead";
+      ui.arranger.appendChild(ph);
+    }
+    updatePlayhead();
+  }
+
+  function dragBadgeText(track) {
+    return `${fmtShift(track.alignMs)}  (${compLabel(track)})`;
+  }
+
+  function bindClipPointer(clip, track, hL, hR) {
+    const onDown = (ev, mode) => {
+      if (ev.pointerType !== "mouse" && state.selectedTrackId !== track.id && mode === "move") {
+        state.selectedTrackId = track.id;
+        renderArranger();
+        return;
+      }
+      if (ev.pointerType === "mouse" && state.selectedTrackId !== track.id) {
+        state.selectedTrackId = track.id;
+      }
+      ev.preventDefault();
+      ev.stopPropagation();
+      try { clip.setPointerCapture(ev.pointerId); } catch (_) { /* */ }
+      const start = {
+        mode,
+        x0: ev.clientX,
+        align0: track.alignMs || 0,
+        ts0: trimStartOf(track),
+        te0: trimEndOf(track),
+        id: track.id,
+      };
+      state.clipDrag = start;
+      const move = (e) => {
+        if (!state.clipDrag || state.clipDrag.id !== track.id) return;
+        const dx = e.clientX - start.x0;
+        const dSec = dx / (state.arrangerPx || 80);
+        const dMs = Math.round(dSec * 1000);
+        if (start.mode === "move") {
+          track.alignMs = Math.max(-30000, Math.min(30000, start.align0 - dMs));
+        } else if (start.mode === "trimL") {
+          const { dur } = clipWindow({ ...track, trimStartSec: 0, trimEndSec: start.te0 });
+          const next = Math.max(0, Math.min(dur - start.te0 - MIN_CLIP, start.ts0 + dSec));
+          track.trimStartSec = next;
+        } else if (start.mode === "trimR") {
+          const { dur } = clipWindow({ ...track, trimStartSec: start.ts0, trimEndSec: 0 });
+          const next = Math.max(0, Math.min(dur - start.ts0 - MIN_CLIP, start.te0 - dSec));
+          track.trimEndSec = next;
+        }
+        repositionClip(track);
+        const badge = clip.querySelector(".arr-offset-badge") || document.createElement("div");
+        badge.className = "arr-offset-badge";
+        badge.textContent = start.mode === "move" ? `${fmtShift(track.alignMs)}` : `trim ${Math.round((track.trimStartSec || 0) * 1000)}–${Math.round((clipWindow(track).dur - (track.trimEndSec || 0)) * 1000)} ms`;
+        if (!badge.parentNode) clip.appendChild(badge);
+        e.preventDefault();
+      };
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", up);
+        const d = state.clipDrag;
+        state.clipDrag = null;
+        if (!d) return;
+        const changed = (track.alignMs || 0) !== d.align0 || trimStartOf(track) !== d.ts0 || trimEndOf(track) !== d.te0;
+        if (!changed) {
+          if (state.selectedTrackId !== track.id) { state.selectedTrackId = track.id; renderArranger(); }
+          return;
+        }
+        const snapA = d.align0, snapS = d.ts0, snapE = d.te0, id = track.id;
+        pushEditUndo(`Moved “${track.name}” to ${fmtShift(track.alignMs)}.`, () => {
+          const t = state.tracks.find((x) => x.id === id);
+          if (!t) return;
+          t.alignMs = snapA; t.trimStartSec = snapS; t.trimEndSec = snapE;
+          renderTracks();
+          persistAfterEdit("timing undone");
+        });
+        if (state.transport === "playing" || state.transport === "recording") {
+          setStatus("Timing change applies the next time you tap Play.", state.transport === "recording" ? "is-recording" : "is-playing");
+        }
+        renderTracks();
+        persistAfterEdit("timing");
+      };
+      window.addEventListener("pointermove", move, { passive: false });
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
+    };
+    clip.addEventListener("pointerdown", (ev) => {
+      if (ev.target === hL || ev.target === hR) return;
+      onDown(ev, "move");
+    });
+    hL.addEventListener("pointerdown", (ev) => onDown(ev, "trimL"));
+    hR.addEventListener("pointerdown", (ev) => onDown(ev, "trimR"));
+  }
+
+  function repositionClip(track) {
+    const clip = ui.arranger && ui.arranger.querySelector(`.arr-clip[data-id="${track.id}"]`);
+    if (!clip) return;
+    const pps = state.arrangerPx || 80;
+    const origin = state.arrangerOrigin || 0;
+    const { ts, te, dur } = clipWindow(track);
+    const off = trackOffsetSec(track);
+    clip.style.left = `${(ts - off - origin) * pps}px`;
+    clip.style.width = `${Math.max(8, (dur - te - ts) * pps)}px`;
+  }
+
+  function updatePlayhead() {
+    const ph = $("arranger-playhead");
+    if (!ph || !ui.arranger || ui.arranger.hidden) return;
+    const playing = state.transport === "playing" || state.transport === "recording";
+    const counting = state.transport === "counting";
+    if (!playing && !counting) { ph.classList.remove("is-on"); return; }
+    const elapsed = counting ? 0 : (engine.ctx ? engine.ctx.currentTime - state.playStartedAt : 0);
+    const pps = state.arrangerPx || 80;
+    const origin = state.arrangerOrigin || 0;
+    ph.classList.add("is-on");
+    ph.style.left = `${96 + (elapsed - origin) * pps - ui.arranger.scrollLeft}px`;
+  }
+
+  function toggleMute(track) {
+    track.muted = !track.muted;
+    renderTracks();
+    refreshAllLiveGains();
+    persistAfterEdit("mute");
+  }
+
+  function updateTrackMeters() {
+    const fills = document.querySelectorAll(".track-meter-fill");
+    if (!fills.length) return;
+    const tmp = engine.trackMeterBuf || (engine.trackMeterBuf = new Float32Array(512));
+    for (const el of fills) {
+      const id = el.getAttribute("data-meter");
+      const nodes = engine.trackNodes.get(id);
+      let peak = 0, sum = 0;
+      if (nodes && nodes.analyser) {
+        nodes.analyser.getFloatTimeDomainData(tmp);
+        for (let i = 0; i < tmp.length; i++) {
+          const v = tmp[i];
+          const a = Math.abs(v);
+          if (a > peak) peak = a;
+          sum += v * v;
+        }
+        const rms = Math.sqrt(sum / tmp.length);
+        const vis = Math.max(Math.sqrt(peak), Math.sqrt(rms) * 1.2);
+        const prev = Number(el.dataset.hold || 0);
+        const hold = Math.max(vis, prev * 0.82);
+        el.dataset.hold = String(hold);
+        el.style.width = `${Math.min(100, Math.round(hold * 100))}%`;
+      } else if (state.transport === "stopped") {
+        el.style.width = "0%";
+        el.dataset.hold = "0";
+      }
+    }
+  }
+
+  async function calibrateLatency() {
+    const status = (msg) => { if (ui.calibrateStatus) ui.calibrateStatus.textContent = msg; };
+    try {
+      await unlockContext({ label: "calibrate" });
+      const ctx = engine.ctx;
+      let stream;
+      try { stream = await getMicStream(micConstraints()); } catch (e) {
+        status("Could not open the mic.");
+        return null;
+      }
+      const pcmOk = setupCapture(stream);
+      if (!pcmOk) { status("This browser cannot measure the mic."); stream.getTracks().forEach((t) => t.stop()); return null; }
+      cap.chunks = []; cap.len = 0; cap.recording = true; cap.maxPeak = 0;
+      const n = 6;
+      const interval = 0.4;
+      const t0 = ctx.currentTime + 0.15;
+      const times = [];
+      for (let i = 0; i < n; i++) {
+        const t = t0 + i * interval;
+        times.push(t);
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = "square";
+        osc.frequency.value = 2000;
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.35, t + 0.002);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.04);
+        osc.connect(g); g.connect(engine.master);
+        osc.start(t); osc.stop(t + 0.05);
+        engine.clickNodes.push(osc);
+      }
+      cap.startTime = ctx.currentTime;
+      status("Playing clicks… stay still and don’t sing.");
+      await new Promise((r) => setTimeout(r, (0.15 + n * interval + 0.3) * 1000));
+      cap.recording = false;
+      const buf = pcmToBuffer(ctx);
+      stream.getTracks().forEach((t) => t.stop());
+      disconnectCapture();
+      if (!buf) { status("No audio was captured."); return null; }
+      const recStart = cap.startTime || t0;
+      const measured = measureClickDelay(buf.getChannelData(0), buf.sampleRate, times.map((t) => t - recStart));
+      if (!measured || !Number.isFinite(measured.ms)) { status("Could not hear the clicks clearly. Try earbuds and run it again."); return null; }
+      const est = estimateRoundTripMs();
+      const suggestedManual = Math.max(-100, Math.min(400, measured.ms - est.autoMs));
+      status(`Heard ${measured.ms} ms of round-trip delay. Auto is ${est.autoMs} ms, so the extra slider is set to ${suggestedManual} ms.`);
+      setManualLatency(est.mode, suggestedManual);
+      diag(`calibrate: measured ${measured.ms} ms (median of ${measured.n} clicks), auto ${est.autoMs}, manual ${suggestedManual}, mode ${est.mode}`);
+      return { measuredMs: measured.ms, autoMs: est.autoMs, manualMs: suggestedManual, mode: est.mode };
+    } catch (e) {
+      status(`Calibration failed (${e && e.name}).`);
+      diag(`calibrate failed: ${e && e.name} ${e && e.message}`);
+      return null;
+    }
+  }
+
+  function measureClickDelay(samples, sr, clickOffsetsSec) {
+    const x = samples;
+    const win = Math.round(0.08 * sr);
+    const hits = [];
+    for (const t of clickOffsetsSec) {
+      const expect = Math.round(t * sr);
+      const a = Math.max(0, expect);
+      const b = Math.min(x.length - 1, expect + Math.round(0.6 * sr));
+      let best = a, bestV = 0;
+      for (let i = a; i < b; i++) {
+        const v = Math.abs(x[i]);
+        if (v > bestV) { bestV = v; best = i; }
+      }
+      if (bestV < 0.01) continue;
+      hits.push((best - expect) / sr * 1000);
+    }
+    if (!hits.length) return null;
+    hits.sort((a, b) => a - b);
+    const ms = Math.round(hits[Math.floor(hits.length / 2)]);
+    return { ms, n: hits.length, all: hits };
+  }
+
+  // Timeline offset in seconds: positive skips into the take (plays earlier),
+  // negative delays it. Non-destructive: the PCM is never trimmed. Set only by
+  // drag, the ms nudges, Reset, or a stored session — never auto-shifted.
   function trackOffsetSec(t) {
     return ((t.latencyOffsetMs || 0) + (t.alignMs || 0)) / 1000;
-  }
-
-  function detectOnset(buffer) {
-    if (!buffer) return null;
-    const x = monoOf(buffer);
-    const sr = buffer.sampleRate;
-    const W = Math.max(8, Math.round(sr * 0.005));
-    const hop = Math.max(1, Math.round(sr * 0.001));
-    const n = Math.min(x.length, Math.round(sr * 60));
-    const cs = new Float64Array(n + 1);
-    for (let i = 0; i < n; i++) cs[i + 1] = cs[i] + x[i] * x[i];
-    const rms = [];
-    for (let i = 0; i + W <= n; i += hop) rms.push(Math.sqrt((cs[i + W] - cs[i]) / W));
-    if (!rms.length) return null;
-    const sorted = rms.slice().sort((a, b) => a - b);
-    const floor = sorted[Math.floor(sorted.length * 0.1)];
-    const maxR = sorted[sorted.length - 1];
-    if (maxR < 0.002) return null;
-    let thr = Math.max(0.01, 4 * floor);
-    if (thr > maxR * 0.5) thr = maxR * 0.5;
-    let idx = rms.findIndex((v) => v > thr);
-    if (idx < 0) return null;
-    // refine to the first sample above the threshold inside the window
-    let s0 = idx * hop;
-    const lim = Math.min(n, s0 + W);
-    for (let i = Math.max(0, s0 - W); i < lim; i++) {
-      if (Math.abs(x[i]) > thr) { s0 = i; break; }
-    }
-    return { sec: s0 / sr, floor, thr };
-  }
-
-  // Optional refinement: normalized cross-correlation of the first ~2 s,
-  // used only if it is confident and agrees with the onset estimate.
-  function xcorrLag(refBuf, refOn, buf, on, maxLagSec) {
-    const dec = 4;
-    const srD = refBuf.sampleRate / dec;
-    const pick = (b, startSec) => {
-      const x = monoOf(b);
-      const st = Math.max(0, Math.round((startSec - 0.1) * b.sampleRate));
-      const len = Math.round(2 * srD);
-      const out = new Float32Array(len);
-      for (let i = 0; i < len; i++) {
-        let a = 0;
-        for (let j = 0; j < dec; j++) a += x[st + i * dec + j] || 0;
-        out[i] = a / dec;
-      }
-      return out;
-    };
-    const a = pick(refBuf, refOn), b = pick(buf, on);
-    const maxLag = Math.round(maxLagSec * srD);
-    let best = -1, bestLag = 0;
-    let ea = 0; for (let i = 0; i < a.length; i++) ea += a[i] * a[i];
-    for (let lag = -maxLag; lag <= maxLag; lag++) {
-      let s = 0, eb = 0;
-      for (let i = 0; i < a.length; i++) {
-        const j = i + lag;
-        if (j < 0 || j >= b.length) continue;
-        s += a[i] * b[j]; eb += b[j] * b[j];
-      }
-      const c = eb > 0 && ea > 0 ? s / Math.sqrt(ea * eb) : 0;
-      if (c > best) { best = c; bestLag = lag; }
-    }
-    return { lagSec: bestLag / srD, conf: best };
-  }
-
-  function alignTracks(onlyTrack) {
-    const withOnset = state.tracks.map((t) => ({ t, on: detectOnset(rawOf(t)) }));
-    const ref = withOnset.find((x) => x.on);
-    if (!ref) { setStatus("No clear vocal start found to align to."); return 0; }
-    const refTimeline = ref.on.sec - trackOffsetSec(ref.t);
-    let changed = 0;
-    for (const { t, on } of withOnset) {
-      if (t === ref.t || !on) continue;
-      if (onlyTrack && t !== onlyTrack) continue;
-      let alignSec = on.sec - (t.latencyOffsetMs || 0) / 1000 - refTimeline;
-      let how = "onset";
-      try {
-        const xc = xcorrLag(rawOf(ref.t), ref.on.sec, rawOf(t), on.sec, 0.06);
-        if (xc.conf > 0.8 && Math.abs(xc.lagSec) <= 0.05) { alignSec += xc.lagSec; how = `onset+xcorr (conf ${xc.conf.toFixed(2)})`; }
-      } catch (_) { /* onset only */ }
-      const ms = Math.max(-3000, Math.min(3000, Math.round(alignSec * 1000)));
-      diag(`align "${t.name}": onset ${(on.sec * 1000).toFixed(0)} ms vs ref "${ref.t.name}" ${(ref.on.sec * 1000).toFixed(0)} ms -> shift ${fmtShift(ms)} (${how})`);
-      t.alignMs = ms;
-      changed++;
-    }
-    return changed;
   }
 
   function fmtShift(alignMs) {
@@ -3000,6 +3465,7 @@ self.onmessage = (e) => {
   }
 
   let undoState = null;
+  let pendingUndo = null;
   let toastTimer = 0;
 
   function hideToast() {
@@ -3078,18 +3544,15 @@ self.onmessage = (e) => {
       el.innerHTML = `
         <div class="track-top">
           <input class="track-name" type="text" maxlength="60" value="">
-          <button type="button" class="btn btn-tiny btn-mute ${track.muted ? "is-on" : ""}" aria-pressed="${track.muted}">M</button>
-          <button type="button" class="btn btn-tiny btn-solo ${track.solo ? "is-solo" : ""}" aria-pressed="${track.solo}">S</button>
+          <div class="track-meter" title="Track level" aria-hidden="true"><div class="track-meter-fill" data-meter="${track.id}"></div></div>
+          <button type="button" class="btn btn-tiny btn-mute ${track.muted ? "is-on" : ""}" aria-pressed="${track.muted}">${track.muted ? "Muted" : "Mute"}</button>
+          <button type="button" class="btn btn-tiny btn-solo ${track.solo ? "is-solo" : ""}" aria-pressed="${track.solo}">Solo</button>
           <button type="button" class="btn btn-tiny btn-media" title="Play this take through the phone’s media player">▶ Media</button>
           <button type="button" class="btn btn-tiny danger btn-del" title="Delete this take" aria-label="Delete ${escapeAttr(track.name)}">🗑</button>
         </div>
         <canvas class="wave" aria-hidden="true"></canvas>
+        <p class="track-comp">${escapeAttr(compLabel(track))}</p>
         <div class="track-tools">
-          <span class="tool-group">
-            <span>Polish</span>
-            <label class="diag-toggle" style="margin:0"><input type="checkbox" class="polish-toggle" ${track.polish || track.prePolished ? "checked" : ""} ${rawOf(track) && !track.busy && !track.prePolished ? "" : "disabled"}> ${track.prePolished ? "from source" : "on"}</label>
-            <span class="polish-info" style="color:var(--muted)">${track.polish && track.polishInfo ? escapeAttr(track.polishInfo) : ""}</span>
-          </span>
           <span class="tool-group">
             <span>Octave</span>
             <button type="button" class="btn btn-tiny oct-down" ${canShift && (track.octave || 0) > -2 ? "" : "disabled"}>8va ↓</button>
@@ -3133,22 +3596,18 @@ self.onmessage = (e) => {
       nameInput.addEventListener("input", () => {
         track.name = nameInput.value.slice(0, 60);
       });
-      el.querySelector(".btn-mute").addEventListener("click", () => {
-        track.muted = !track.muted;
-        renderTracks();
-        refreshAllLiveGains();
-      });
+      el.querySelector(".btn-mute").addEventListener("click", () => toggleMute(track));
       el.querySelector(".btn-solo").addEventListener("click", () => {
         track.solo = !track.solo;
         renderTracks();
         refreshAllLiveGains();
+        persistAfterEdit("solo");
       });
       el.querySelector(".btn-media").addEventListener("click", () => {
         diag(`--- MEDIA PLAYER tap "${track.name}" --- blob ${track.blob ? `${track.blob.type} ${track.blob.size}B` : "none"}`);
         if (track.blob) playBlobPlain(mediaBlobFor(track), `media "${track.name}"`);
       });
       el.querySelector(".btn-del").addEventListener("click", () => deleteTrack(track.id));
-      el.querySelector(".polish-toggle").addEventListener("change", (e) => setPolish(track, e.target.checked));
       el.querySelector(".oct-up").addEventListener("click", () => setOctave(track, (track.octave || 0) + 1));
       el.querySelector(".oct-down").addEventListener("click", () => setOctave(track, (track.octave || 0) - 1));
       el.querySelector(".oct-reset").addEventListener("click", () => setOctave(track, 0));
@@ -3174,6 +3633,7 @@ self.onmessage = (e) => {
           label.textContent = `${Math.round(v * 100)}${labelSuffix}`;
           updateLiveTrackGains(track);
           updateMediaElGains();
+          persistAfterEdit(key);
         });
       };
       bindSlider(".vol", "volume", "%");
@@ -3181,8 +3641,9 @@ self.onmessage = (e) => {
       bindSlider(".del-send", "delaySend", "%");
       ui.trackList.appendChild(el);
       const canvas = el.querySelector(".wave");
-      requestAnimationFrame(() => drawWaveform(canvas, track.buffer));
+      requestAnimationFrame(() => drawWaveform(canvas, track.buffer, { trimStart: trimStartOf(track), trimEnd: trimEndOf(track) }));
     });
+    renderArranger();
   }
 
   function openDb() {
@@ -3274,10 +3735,14 @@ self.onmessage = (e) => {
         muted: t.muted,
         solo: t.solo,
         latencyOffsetMs: t.latencyOffsetMs,
+        latencyAutoMs: t.latencyAutoMs,
+        latencyManualMs: t.latencyManualMs,
+        latencyStartCompMs: t.latencyStartCompMs,
+        outputMode: t.outputMode || "",
         alignMs: t.alignMs || 0,
+        trimStartSec: t.trimStartSec || 0,
+        trimEndSec: t.trimEndSec || 0,
         octave: t.octave || 0,
-        polish: !!t.polish,
-        prePolished: !!t.prePolished,
         reverbSend: t.reverbSend,
         delaySend: t.delaySend,
         mimeType: t.mimeType,
@@ -3304,11 +3769,15 @@ self.onmessage = (e) => {
         muted: !!row.muted,
         solo: !!row.solo,
         latencyOffsetMs: Number.isFinite(row.latencyOffsetMs) ? row.latencyOffsetMs : 0,
+        latencyAutoMs: Number.isFinite(row.latencyAutoMs) ? row.latencyAutoMs : undefined,
+        latencyManualMs: Number.isFinite(row.latencyManualMs) ? row.latencyManualMs : undefined,
+        latencyStartCompMs: Number.isFinite(row.latencyStartCompMs) ? row.latencyStartCompMs : undefined,
+        outputMode: row.outputMode || "",
         alignMs: Number.isFinite(row.alignMs) ? row.alignMs : 0,
+        trimStartSec: Number.isFinite(row.trimStartSec) ? Math.max(0, row.trimStartSec) : 0,
+        trimEndSec: Number.isFinite(row.trimEndSec) ? Math.max(0, row.trimEndSec) : 0,
         octave: 0,
         rawBuffer: buffer,
-        polish: !!row.polish && !!buffer,
-        prePolished: !!row.prePolished,
         pendingOctave: Number.isFinite(row.octave) && buffer ? Math.max(-2, Math.min(2, Math.round(row.octave))) : 0,
         reverbSend: Number.isFinite(row.reverbSend) ? row.reverbSend : 0.35,
         delaySend: Number.isFinite(row.delaySend) ? row.delaySend : 0.2,
@@ -3322,7 +3791,7 @@ self.onmessage = (e) => {
       const k = t.pendingOctave || 0;
       delete t.pendingOctave;
       t.octave = k;
-      if (k || t.polish) rebuildChain(t);
+      if (k) rebuildChain(t);
     }
   }
 
@@ -3600,12 +4069,13 @@ self.onmessage = (e) => {
         muted: t.muted,
         solo: t.solo,
         latencyOffsetMs: t.latencyOffsetMs,
+        latencyAutoMs: t.latencyAutoMs,
         alignMs: t.alignMs || 0,
+        trimStartSec: t.trimStartSec || 0,
+        trimEndSec: t.trimEndSec || 0,
         octave: t.octave || 0,
         busy: !!t.busy,
-        polish: !!t.polish,
-        polished: !!(t.polish && t.polishedBuffer && t.baseBuffer === t.polishedBuffer),
-        polishStats: t.polishStats || null,
+        muted: t.muted,
         reverbSend: t.reverbSend,
         delaySend: t.delaySend,
         mimeType: t.mimeType,
@@ -3668,13 +4138,7 @@ self.onmessage = (e) => {
       diag(`media tone: WAV ${blob.size} bytes, volume 1, not muted`);
       playBlobPlain(blob, "media tone");
     });
-    ui.toastUndo.addEventListener("click", undoDelete);
-    ui.alignBtn.addEventListener("click", () => {
-      const n = alignTracks(null);
-      renderTracks();
-      if (!n) setStatus("Nothing to sync yet: need two takes with a clear vocal start.");
-      if (n) { setStatus(`Synced ${n} take${n === 1 ? "" : "s"} to ${state.tracks[0] ? `“${state.tracks[0].name}”` : "the first take"}.`); persistAfterEdit("auto-align"); }
-    });
+    ui.toastUndo.addEventListener("click", runToastUndo);
     ui.resetOffsets.addEventListener("click", () => {
       let n = 0;
       for (const t of state.tracks) { if (t.alignMs) { t.alignMs = 0; n++; } }
@@ -3682,10 +4146,6 @@ self.onmessage = (e) => {
       setStatus(n ? `Reset the offset on ${n} take${n === 1 ? "" : "s"}.` : "All offsets are already 0 ms.");
       diag(`reset offsets: ${n} take(s) set to 0 ms`);
       if (n) persistAfterEdit("reset offsets");
-    });
-    ui.autoAlignNew.addEventListener("change", () => {
-      state.autoAlignNew = ui.autoAlignNew.checked;
-      lsSet("revamped-reverb.autoAlignNew", state.autoAlignNew ? "1" : "0");
     });
     ui.monSpeaker.addEventListener("click", () => setMonitorMode("speaker", true));
     ui.monEarbuds.addEventListener("click", () => setMonitorMode("earbuds", true));
@@ -3720,9 +4180,28 @@ self.onmessage = (e) => {
     });
 
     ui.latency.addEventListener("input", () => {
-      state.latencyMs = Number(ui.latency.value);
-      ui.latencyLabel.textContent = `${state.latencyMs} ms`;
+      setManualLatency(currentOutputMode(), Number(ui.latency.value));
     });
+    ui.latSpeaker.addEventListener("click", () => pinLatencyMode("speaker"));
+    ui.latWired.addEventListener("click", () => pinLatencyMode("wired"));
+    ui.latBluetooth.addEventListener("click", () => pinLatencyMode("bluetooth"));
+    ui.calibrate.addEventListener("click", () => {
+      calibrateLatency().catch((e) => setStatus(e.message || "Calibration failed."));
+    });
+    ui.arrZoomIn.addEventListener("click", () => {
+      state.arrangerPx = Math.min(400, Math.round((state.arrangerPx || 80) * 1.4));
+      renderArranger();
+    });
+    ui.arrZoomOut.addEventListener("click", () => {
+      state.arrangerPx = Math.max(20, Math.round((state.arrangerPx || 80) / 1.4));
+      renderArranger();
+    });
+    if (ui.arranger) {
+      ui.arranger.addEventListener("pointerdown", (ev) => {
+        if (ev.target.closest(".arr-clip") || ev.target.closest(".btn") || ev.target.closest(".arranger-lane-meta")) return;
+        if (state.selectedTrackId) { state.selectedTrackId = null; renderArranger(); }
+      });
+    }
     ui.countIn.addEventListener("change", () => {
       state.countInBeats = Number(ui.countIn.value) || 0;
     });
@@ -3730,6 +4209,24 @@ self.onmessage = (e) => {
       const v = Math.min(240, Math.max(40, Number(ui.bpm.value) || 120));
       state.bpm = v;
       ui.bpm.value = String(v);
+    });
+    ui.metro.addEventListener("click", () => {
+      state.metronomeOn = !state.metronomeOn;
+      lsSet("revamped-reverb.metronomeOn", state.metronomeOn ? "1" : "0");
+      syncMetroUi();
+    });
+    ui.clickVol.addEventListener("input", () => {
+      state.clickVolume = Number(ui.clickVol.value) / 100;
+      lsSet("revamped-reverb.clickVolume", String(state.clickVolume));
+      syncMetroUi();
+    });
+    ui.timeSig.addEventListener("change", () => {
+      state.beatsPerBar = Number(ui.timeSig.value) || 4;
+      lsSet("revamped-reverb.beatsPerBar", String(state.beatsPerBar));
+    });
+    ui.metroPlayback.addEventListener("change", () => {
+      state.metronomeOnPlayback = ui.metroPlayback.checked;
+      lsSet("revamped-reverb.metroPlayback", state.metronomeOnPlayback ? "1" : "0");
     });
 
     ui.reverbEnabled.addEventListener("change", () => {
@@ -3815,7 +4312,17 @@ self.onmessage = (e) => {
     setStatus("Ready");
     diag(`page loaded. userAgent: ${navigator.userAgent}`);
     state.monitorMode = lsGet(MON_KEY) === "earbuds" ? "earbuds" : "speaker";
-    state.autoAlignNew = lsGet("revamped-reverb.autoAlignNew") !== "0";
+    state.metronomeOn = lsGet("revamped-reverb.metronomeOn") === "1";
+    const storedVolRaw = lsGet("revamped-reverb.clickVolume");
+    const storedVol = storedVolRaw == null || storedVolRaw === "" ? NaN : Number(storedVolRaw);
+    if (Number.isFinite(storedVol)) state.clickVolume = Math.max(0, Math.min(1, storedVol));
+    const storedSig = Number(lsGet("revamped-reverb.beatsPerBar"));
+    if (storedSig === 2 || storedSig === 3 || storedSig === 4 || storedSig === 6) state.beatsPerBar = storedSig;
+    state.metronomeOnPlayback = lsGet("revamped-reverb.metroPlayback") === "1";
+    for (const mode of ["speaker", "wired", "bluetooth"]) {
+      const v = Number(lsGet(LAT_KEYS[mode]));
+      if (Number.isFinite(v)) state.manualLatency[mode] = v;
+    }
     state.phoneProcessing = lsGet("revamped-reverb.phoneProcessing") === "1";
     ui.phoneProcessing.checked = state.phoneProcessing;
     ui.phoneProcessing.addEventListener("change", () => {
@@ -3823,8 +4330,9 @@ self.onmessage = (e) => {
       lsSet("revamped-reverb.phoneProcessing", state.phoneProcessing ? "1" : "0");
       diag(`phone processing ${state.phoneProcessing ? "ON (autoGainControl + noiseSuppression requested)" : "OFF (raw mic)"}; applies to the next take`);
     });
-    ui.autoAlignNew.checked = state.autoAlignNew;
     renderMonitor();
+    syncLatencyUi();
+    syncMetroUi();
     diag(`monitor mode: ${state.monitorMode} (${lsGet(MON_USER_KEY) === "1" ? "your saved choice" : "default"})`);
     refreshOutputs("page load");
     diag(`secure context: ${window.isSecureContext}; AudioContext: ${!!(window.AudioContext || window.webkitAudioContext)}; MediaRecorder: ${typeof MediaRecorder !== "undefined"}; setSinkId on AudioContext: ${!!(window.AudioContext && AudioContext.prototype.setSinkId)}`);
@@ -3840,18 +4348,100 @@ self.onmessage = (e) => {
         };
       },
       pitchShift(samples, octaves) { return shiftSamples(new Float32Array(samples), octaves); },
-      detectOnset(samples, sampleRate) { return detectOnset(makeBuffer(new Float32Array(samples), sampleRate)); },
-      addTrackFromSamples(samples, sampleRate, name) {
+      addTrackFromSamples(samples, sampleRate, name, extra) {
         const buf = makeBuffer(new Float32Array(samples), sampleRate);
-        state.tracks.push({ id: uid(), name: name || `Track ${state.tracks.length + 1}`, blob: makeWavBlob(buf.getChannelData(0), sampleRate), buffer: buf, peak: bufferPeak(buf), mimeType: "audio/wav", volume: 1, muted: false, solo: false, latencyOffsetMs: 0, alignMs: 0, octave: 0, reverbSend: 0, delaySend: 0 });
+        const x = extra || {};
+        state.tracks.push({
+          id: uid(), name: name || `Track ${state.tracks.length + 1}`,
+          blob: makeWavBlob(buf.getChannelData(0), sampleRate), buffer: buf, rawBuffer: buf,
+          peak: bufferPeak(buf), mimeType: "audio/wav", volume: 1, muted: false, solo: false,
+          latencyOffsetMs: x.latencyOffsetMs || 0, latencyAutoMs: x.latencyAutoMs, latencyManualMs: x.latencyManualMs,
+          latencyStartCompMs: x.latencyStartCompMs, outputMode: x.outputMode || "",
+          alignMs: x.alignMs || 0, trimStartSec: x.trimStartSec || 0, trimEndSec: x.trimEndSec || 0,
+          octave: 0, reverbSend: 0, delaySend: 0,
+        });
         renderTracks();
+        return state.tracks.length - 1;
       },
-      alignAll() { const n = alignTracks(null); renderTracks(); return n; },
-      async polishSamples(samples, sampleRate) {
-        const r = await polishBuffer(makeBuffer(new Float32Array(samples), sampleRate));
-        return { stats: r.stats, out: r.buffer ? Array.from(r.buffer.getChannelData(0)) : null };
+      ingestTake(samples, sampleRate, name) {
+        // Same path as a finished recording (no auto shift, raw audio).
+        const buf = makeBuffer(new Float32Array(samples), sampleRate);
+        const index = state.tracks.length + 1;
+        const comp = compensationForNewTake(0, estimateRoundTripMs());
+        state.tracks.push({
+          id: uid(), name: name || `Track ${index}`, blob: makeWavBlob(buf.getChannelData(0), sampleRate),
+          buffer: buf, rawBuffer: buf, peak: bufferPeak(buf), mimeType: "audio/wav", volume: 1,
+          muted: false, solo: false, latencyOffsetMs: comp.totalMs, latencyAutoMs: comp.autoMs,
+          latencyManualMs: comp.manualMs, latencyStartCompMs: 0, outputMode: comp.mode,
+          alignMs: 0, trimStartSec: 0, trimEndSec: 0, octave: 0, reverbSend: 0, delaySend: 0,
+        });
+        renderTracks();
+        return { index: state.tracks.length - 1, duration: buf.duration, length: buf.length, comp, alignMs: 0, trimStartSec: 0 };
       },
-      async setPolish(i, on) { await setPolish(state.tracks[i], on); return snapshotForTest(); },
+      estimateRoundTripMs,
+      currentOutputMode,
+      setManualLatency,
+      BT_DEFAULT_MS,
+      compensationForNewTake,
+      measureClickDelay,
+      metroState() {
+        return { on: !!state.metronomeOn, playback: !!state.metronomeOnPlayback, volume: clickVolumeNow(), beatsPerBar: state.beatsPerBar || 4, bpm: state.bpm };
+      },
+      setMetro(opts) {
+        opts = opts || {};
+        if (opts.on != null) state.metronomeOn = !!opts.on;
+        if (opts.playback != null) state.metronomeOnPlayback = !!opts.playback;
+        if (opts.volume != null) state.clickVolume = Math.max(0, Math.min(1, Number(opts.volume)));
+        if (opts.beatsPerBar) state.beatsPerBar = Number(opts.beatsPerBar);
+        syncMetroUi();
+        return this.metroState();
+      },
+      clickBusIsOutputOnly() {
+        return !!(engine.clickGain && engine.clickGain.__isClickBus && engine.master && engine.clickGain.numberOfOutputs >= 0);
+      },
+      setAlignMs(i, ms) { const t = state.tracks[i]; if (!t) return null; t.alignMs = ms; renderTracks(); return trackOffsetSec(t); },
+      dragByPixels(i, dx, pps) {
+        const t = state.tracks[i]; if (!t) return null;
+        const before = t.alignMs || 0;
+        t.alignMs = Math.round(before - (dx / (pps || state.arrangerPx || 80)) * 1000);
+        renderTracks();
+        return { alignMs: t.alignMs, offsetSec: trackOffsetSec(t), deltaMs: t.alignMs - before };
+      },
+      setTrim(i, start, end) { const t = state.tracks[i]; if (!t) return null; t.trimStartSec = start; t.trimEndSec = end; renderTracks(); return clipWindow(t); },
+      muteTrack(i, on) { const t = state.tracks[i]; if (!t) return null; t.muted = on !== undefined ? !!on : !t.muted; renderTracks(); refreshAllLiveGains(); return t.muted; },
+      trackMeters() {
+        return [...document.querySelectorAll(".track-meter-fill")].map((el) => ({ id: el.getAttribute("data-meter"), width: el.style.width }));
+      },
+      meterDebug() {
+        const peakOf = (an) => {
+          if (!an) return 0;
+          const tmp = new Float32Array(an.fftSize);
+          an.getFloatTimeDomainData(tmp);
+          let pk = 0; for (const v of tmp) pk = Math.max(pk, Math.abs(v));
+          return +pk.toFixed(4);
+        };
+        const out = [];
+        for (const [id, n] of engine.trackNodes) {
+          const t = state.tracks.find((x) => x.id === id);
+          out.push({
+            id, hasAn: !!n.analyser, pk: peakOf(n.analyser),
+            mute: n.mute && n.mute.gain.value, vol: n.vol && n.vol.gain.value,
+            sameCtx: !!(n.analyser && engine.ctx && n.analyser.context === engine.ctx),
+            bufLen: t && t.buffer && t.buffer.length, srcBuf: n.source && n.source.buffer && n.source.buffer.length,
+            srcCtx: n.source && n.source.context === engine.ctx,
+          });
+        }
+        return {
+          nodes: engine.trackNodes.size, out,
+          dryPk: peakOf(engine.dryTap), masterPk: peakOf(engine.meter),
+          transport: state.transport, ctx: engine.ctx && engine.ctx.state,
+          t: engine.ctx && +(engine.ctx.currentTime - state.playStartedAt).toFixed(3),
+        };
+      },
+      arrangerState() {
+        const clips = [...document.querySelectorAll(".arr-clip")].map((c) => ({ id: c.dataset.id, left: c.style.left, width: c.style.width, selected: c.classList.contains("is-selected") }));
+        return { px: state.arrangerPx, origin: state.arrangerOrigin, selected: state.selectedTrackId, clips };
+      },
       micConstraints() { return micConstraints(); },
       async renderMix() { const m = await renderMediaMix(); return m ? Array.from(m.samples) : null; },
       trackBuffer(i) { const b = state.tracks[i] && state.tracks[i].buffer; return b ? Array.from(b.getChannelData(0)) : null; },
